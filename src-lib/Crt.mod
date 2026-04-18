@@ -1,5 +1,7 @@
 MODULE Crt;
 
+IMPORT Out;
+
 CONST
 
 (* CRT modes *)
@@ -79,6 +81,67 @@ PROCEDURE Sound*(Hz: INTEGER);
 PROCEDURE NoSound*;
 *)
 
+PROCEDURE KeyPressed*: BOOLEAN;
+VAR regs : SYSTEM.Registers;
 BEGIN
+    regs.AX := 0B00H;
+    SYSTEM.Intr(21H, regs);
+    RETURN (regs.AX DIV 256) = 0FFH;
+END KeyPressed;
+
+PROCEDURE ReadKey*: CHAR;
+VAR regs : SYSTEM.Registers;
+BEGIN
+    regs.AX := 0800H;
+    SYSTEM.Intr(21H, regs);
+    RETURN CHR(regs.AX MOD 256)
+END ReadKey;
+
+PROCEDURE TextMode*(Mode: BYTE);
+VAR regs : SYSTEM.Registers;
+BEGIN
+    regs.AX := Mode;
+    SYSTEM.Intr(10H, regs);
+END TextMode;
+
+PROCEDURE GotoXY*(X, Y: INTEGER);
+BEGIN
+    Out.Char(CHR(27));
+    Out.Char('[');
+    Out.Int(Y, 0);
+    Out.Char(';');
+    Out.Int(X, 0);
+    Out.Char('H')
+END GotoXY;
+
+PROCEDURE ClrScr*;
+BEGIN
+    Out.Char(CHR(27));
+    Out.String("[2J");
+    Out.Char(CHR(27));
+    Out.String("[1;1H");
+END ClrScr;
+
+PROCEDURE ClrEol*;
+BEGIN
+    Out.Char(CHR(27));
+    Out.String("[K");
+END ClrEol;
+
+PROCEDURE TextColor*(fg : INTEGER);
+BEGIN
+    Out.Char(CHR(27));
+    Out.String("[3");
+    Out.Char(CHR(30H + (fg MOD 8)));
+    Out.Char('m');
+END TextColor;
+
+PROCEDURE TextBackground*(bg : INTEGER);
+BEGIN
+    Out.Char(CHR(27));
+    Out.String("[4");
+    Out.Char(CHR(30H + (bg MOD 8)));
+    Out.Char('m');
+END TextBackground;
 
 END Crt.

@@ -114,41 +114,56 @@ BEGIN
   END
 END Set;
 
-PROCEDURE Read*(VAR r: Rider; VAR x: BYTE);
-  VAR regs: SYSTEM.Registers;
+PROCEDURE BlockRead*(VAR r: Rider; VAR x; len : INTEGER) : INTEGER;
+  VAR regs: SYSTEM.Registers; p : POINTER TO CHAR;
 BEGIN
   IF (r.f # NIL) & (r.f.h # -1) THEN
+    p := x;
     regs.AX := 3F00H;
     regs.BX := r.f.h;
-    regs.CX := 1;
-    regs.DS := SYSTEM.SEG(x);
-    regs.DX := SYSTEM.OFS(x);
+    regs.CX := len;
+    regs.DS := SYSTEM.SEG(p^);
+    regs.DX := SYSTEM.OFS(p^);
     regs.Flags := 0;
     SYSTEM.Intr(21H, regs);
     IF ((regs.Flags & SYSTEM.FCarry) # 0) OR (regs.AX = 0) THEN
       r.eof := TRUE;
-      x := 0X
     ELSE
-      r.pos := r.pos + 1
+      r.pos := r.pos + regs.AX;
+      RETURN regs.AX
     END
-  END
-END Read;
+  END;
+  RETURN 0
+END BlockRead;
 
-PROCEDURE Write*(VAR r: Rider; x: BYTE);
-  VAR regs: SYSTEM.Registers;
+PROCEDURE BlockWrite*(VAR r: Rider; VAR x; len : INTEGER) : INTEGER;
+  VAR regs: SYSTEM.Registers; p : POINTER TO CHAR;
 BEGIN
   IF (r.f # NIL) & (r.f.h # -1) THEN
+    p := x;
     regs.AX := 4000H;
     regs.BX := r.f.h;
     regs.CX := 1;
-    regs.DS := SYSTEM.SEG(x);
-    regs.DX := SYSTEM.OFS(x);
+    regs.DS := SYSTEM.SEG(p^);
+    regs.DX := SYSTEM.OFS(p^);
     regs.Flags := 0;
     SYSTEM.Intr(21H, regs);
     IF (regs.Flags & SYSTEM.FCarry) = 0 THEN
-      r.pos := r.pos + 1
+      r.pos := r.pos + regs.AX;
+      RETURN regs.AX
     END
-  END
+  END;
+  RETURN 0
+END BlockWrite;
+
+PROCEDURE Read*(VAR r: Rider; VAR x: BYTE);
+BEGIN
+  BlockRead(r, x, 1)
+END Read;
+
+PROCEDURE Write*(VAR r: Rider; x: BYTE);
+BEGIN
+  BlockWrite(r, x, 1)
 END Write;
 
 PROCEDURE Pos*(VAR r: Rider): LONGINT;

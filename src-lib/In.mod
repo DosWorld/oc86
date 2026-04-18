@@ -64,7 +64,6 @@ BEGIN
   END
 END Int;
 
-(*
 PROCEDURE LongInt*(VAR l: LONGINT);
 VAR 
   sgn: LONGINT;
@@ -90,7 +89,6 @@ BEGIN
     END
   END
 END LongInt;
-*)
 
 PROCEDURE String*(VAR s: ARRAY OF CHAR);
 VAR i: INTEGER;

@@ -1,0 +1,30 @@
+MODULE SYSTEM;
+
+CONST
+FCarry*     = 1;
+FParity*    = 4;
+FAuxiliary* = 16;
+FZero*      = 64;
+FSign*      = 128;
+FOverflow*  = 2048;
+
+TYPE
+Registers* = RECORD
+  AX*, BX*, CX*, DX*, SI*, DI*, DS*, ES*, Flags* : INTEGER
+END;
+
+PROCEDURE CallFar*(ProcPtr: ADDRESS; VAR Regs:Registers);EXTERNAL;
+PROCEDURE Intr*(IntNo: BYTE;VAR Regs : Registers);EXTERNAL;
+
+PROCEDURE Halt*(ErrCode: BYTE);EXTERNAL;
+
+PROCEDURE Alloc*(sizeInBytes : INTEGER) : ADDRESS;EXTERNAL;
+PROCEDURE Free*(p : ADDRESS) : ADDRESS;EXTERNAL;
+
+PROCEDURE S32MUL*(a, b :LONGINT):LONGINT;EXTERNAL;
+PROCEDURE S32DIV*(a, b :LONGINT):LONGINT;EXTERNAL;
+PROCEDURE S32MOD*(a, b :LONGINT):LONGINT;EXTERNAL;
+
+(*$L SYS.RDF*)
+
+END SYSTEM.

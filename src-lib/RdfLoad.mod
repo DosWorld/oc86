@@ -1,0 +1,3 @@
+MODULE RdfLoad;
+
+END RdfLoad.
