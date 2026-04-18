@@ -879,9 +879,8 @@ SYSTEM is pre-declared as a K_IMPORT symbol, **always implicitly available**.
 - `IMPORT SYSTEM` is a **compile error**
 - `SYSTEM.Foo` creates a lazy RDOFF IMPORT for `SYSTEM_Foo` on first use
 - `SYSTEM__init` is never called
-- Missing `SYSTEM.def` is a **compile error**
 
-### SYSTEM module symbols (from `src-lib/SYSTEM.DEF`)
+### SYSTEM module symbols (from `src-lib/SYSTEM.Mod`)
 
 **Constants:** `FCarry=1  FParity=4  FAuxiliary=16  FZero=64  FSign=128  FOverflow=2048`
 

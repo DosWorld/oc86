@@ -292,17 +292,3 @@ END
 **Legacy format (reader only):** `PROC fullname seg offset` — accepted by `def_read` for
 hand-written `.def` files, but `def_write` never produces it.  Legacy form sets `is_far=0`
 (NEAR) by default — do not rely on it for cross-module FAR procs.
-
-**`SYSTEM.DEF sync rule`  ⚠️ INVARIANT**
-
-`src-lib/SYSTEM.DEF` is the **reference implementation** of the .def extended format.
-Whenever **anything** changes about the .def file format, ALL of these steps are required:
-
-1. Update `src-lib/SYSTEM.DEF` to use the new format
-2. Run `make -C src-lib install` to rebuild and re-install all libraries to `lib/`
-3. Run full test suite: `make test`
-
-**If `src-lib/SYSTEM.DEF` is invalid after a format change — the change is INCOMPLETE.**
-
-Triggers: new field in any record, new keyword/tag, type reference syntax changed,
-`PROC`/`PARAM`/`FIELD`/`TYPE`/`CONST`/`VAR` syntax modified, new section type added.

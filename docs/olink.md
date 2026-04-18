@@ -1,4 +1,4 @@
-# OLINK — RDOFF2 Smart Linker for MS-DOS
+# OLINK — Smart Linker for MS-DOS
 
 Source: `src/olink.c` + `src/olink.h`  
 Binary: `olink` (Linux/Mac) / `olink.exe` (DOS)  
