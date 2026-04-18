@@ -1,6 +1,6 @@
 MODULE TestLongReals;
 
-IMPORT Out;
+IMPORT Out87;
 
 CONST
   Ok* = 0;
@@ -29,9 +29,9 @@ VAR
 
 PROCEDURE InitTest(name: ARRAY OF CHAR);
 BEGIN
-  Out.String("Testing: ");
-  Out.String(name);
-  Out.Ln;
+  Out87.String("Testing: ");
+  Out87.String(name);
+  Out87.Ln;
   testResult := Ok
 END InitTest;
 
@@ -39,10 +39,10 @@ PROCEDURE Assert(condition: BOOLEAN; errorCode: INTEGER);
 BEGIN
   IF ~condition THEN
     testResult := errorCode;
-    Out.String("  FAILED (error code: ");
-    Out.Int(errorCode, 0);
-    Out.String(")");
-    Out.Ln
+    Out87.String("  FAILED (error code: ");
+    Out87.Int(errorCode, 0);
+    Out87.String(")");
+    Out87.Ln
   END
 END Assert;
 
@@ -54,11 +54,11 @@ BEGIN
   IF diff < 0.0 THEN diff := -diff END;
   IF diff > Epsilon THEN
     testResult := errorCode;
-    Out.String("  FAILED: expected ");
-    Out.LongReal(expected, 12);
-    Out.String(", got ");
-    Out.LongReal(actual, 12);
-    Out.Ln
+    Out87.String("  FAILED: expected ");
+    Out87.LongReal(expected, 12);
+    Out87.String(", got ");
+    Out87.LongReal(actual, 12);
+    Out87.Ln
   END
 END AssertLongReal;
 
@@ -66,11 +66,11 @@ PROCEDURE AssertBool(actual, expected: BOOLEAN; errorCode: INTEGER);
 BEGIN
   IF actual # expected THEN
     testResult := errorCode;
-    Out.String("  FAILED: expected ");
-    IF expected THEN Out.String("TRUE") ELSE Out.String("FALSE") END;
-    Out.String(", got ");
-    IF actual THEN Out.String("TRUE") ELSE Out.String("FALSE") END;
-    Out.Ln
+    Out87.String("  FAILED: expected ");
+    IF expected THEN Out87.String("TRUE") ELSE Out87.String("FALSE") END;
+    Out87.String(", got ");
+    IF actual THEN Out87.String("TRUE") ELSE Out87.String("FALSE") END;
+    Out87.Ln
   END
 END AssertBool;
 
@@ -78,44 +78,44 @@ PROCEDURE AssertInt(actual, expected: INTEGER; errorCode: INTEGER);
 BEGIN
   IF actual # expected THEN
     testResult := errorCode;
-    Out.String("  FAILED: expected ");
-    Out.Int(expected, 0);
-    Out.String(", got ");
-    Out.Int(actual, 0);
-    Out.Ln
+    Out87.String("  FAILED: expected ");
+    Out87.Int(expected, 0);
+    Out87.String(", got ");
+    Out87.Int(actual, 0);
+    Out87.Ln
   END
 END AssertInt;
 
 PROCEDURE ReportTest;
 BEGIN
   IF testResult = Ok THEN
-    Out.String("  PASSED");
-    Out.Ln;
+    Out87.String("  PASSED");
+    Out87.Ln;
     INC(passedTests)
   ELSE
-    Out.String("  TEST FAILED");
-    Out.Ln
+    Out87.String("  TEST FAILED");
+    Out87.Ln
   END;
   INC(totalTests);
-  Out.Ln
+  Out87.Ln
 END ReportTest;
 
 PROCEDURE PrintSummary;
 BEGIN
-  Out.Ln;
-  Out.String("========================================");
-  Out.Ln;
-  Out.String("Total tests: ");
-  Out.Int(totalTests, 0);
-  Out.Ln;
-  Out.String("Passed: ");
-  Out.Int(passedTests, 0);
-  Out.Ln;
-  Out.String("Failed: ");
-  Out.Int(totalTests - passedTests, 0);
-  Out.Ln;
-  Out.String("========================================");
-  Out.Ln
+  Out87.Ln;
+  Out87.String("========================================");
+  Out87.Ln;
+  Out87.String("Total tests: ");
+  Out87.Int(totalTests, 0);
+  Out87.Ln;
+  Out87.String("Passed: ");
+  Out87.Int(passedTests, 0);
+  Out87.Ln;
+  Out87.String("Failed: ");
+  Out87.Int(totalTests - passedTests, 0);
+  Out87.Ln;
+  Out87.String("========================================");
+  Out87.Ln
 END PrintSummary;
 
 PROCEDURE TestLongRealArithmetic*;
@@ -152,11 +152,11 @@ BEGIN
   (* Use values within REAL (single) range since literals are stored as 4-byte float.
      True MaxLongReal/MinLongReal constants overflow single precision. *)
   a := 1.0E38;
-  Out.String("  1E38: "); Out.LongReal(a, 12); Out.Ln;
+  Out87.String("  1E38: "); Out87.LongReal(a, 12); Out87.Ln;
   Assert(a > 1.0E37, ErrArithmetic);
 
   a := 1.0E-37;
-  Out.String("  1E-37: "); Out.LongReal(a, 12); Out.Ln;
+  Out87.String("  1E-37: "); Out87.LongReal(a, 12); Out87.Ln;
   Assert(a > 0.0, ErrArithmetic);
 
   b := a;
@@ -445,12 +445,12 @@ END TestHeapAllocation;
 
 PROCEDURE RunAllTests*;
 BEGIN
-  Out.String("========================================");
-  Out.Ln;
-  Out.String("Starting LONGREAL Type and Memory Tests");
-  Out.Ln;
-  Out.String("========================================");
-  Out.Ln;
+  Out87.String("========================================");
+  Out87.Ln;
+  Out87.String("Starting LONGREAL Type and Memory Tests");
+  Out87.Ln;
+  Out87.String("========================================");
+  Out87.Ln;
 
   totalTests := 0;
   passedTests := 0;

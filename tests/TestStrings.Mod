@@ -15,8 +15,9 @@ CONST
 VAR
   totalTests, passedTests: INTEGER;
   testResult: INTEGER;
-  buf: ARRAY 32 OF CHAR;
-  dst: ARRAY 16 OF CHAR;
+  (* Global (DS-segment) arrays for DS-path tests *)
+  gbuf: ARRAY 32 OF CHAR;
+  gdst: ARRAY 16 OF CHAR;
 
 PROCEDURE InitTest(name: ARRAY OF CHAR);
 BEGIN
@@ -114,6 +115,9 @@ BEGIN
 END TestPos;
 
 PROCEDURE TestAppend*;
+VAR
+  buf: ARRAY 32 OF CHAR;
+  dst: ARRAY 16 OF CHAR;
 BEGIN
   InitTest("Strings.Append");
 
@@ -133,6 +137,9 @@ BEGIN
 END TestAppend;
 
 PROCEDURE TestInsert*;
+VAR
+  buf: ARRAY 32 OF CHAR;
+  dst: ARRAY 16 OF CHAR;
 BEGIN
   InitTest("Strings.Insert");
 
@@ -152,6 +159,9 @@ BEGIN
 END TestInsert;
 
 PROCEDURE TestDelete*;
+VAR
+  buf: ARRAY 32 OF CHAR;
+  dst: ARRAY 16 OF CHAR;
 BEGIN
   InitTest("Strings.Delete");
 
@@ -171,6 +181,9 @@ BEGIN
 END TestDelete;
 
 PROCEDURE TestReplace*;
+VAR
+  buf: ARRAY 32 OF CHAR;
+  dst: ARRAY 16 OF CHAR;
 BEGIN
   InitTest("Strings.Replace");
 
@@ -186,6 +199,9 @@ BEGIN
 END TestReplace;
 
 PROCEDURE TestExtract*;
+VAR
+  buf: ARRAY 32 OF CHAR;
+  dst: ARRAY 16 OF CHAR;
 BEGIN
   InitTest("Strings.Extract");
 
@@ -203,6 +219,97 @@ BEGIN
 
   ReportTest
 END TestExtract;
+
+PROCEDURE TestAppendGlobal*;
+BEGIN
+  InitTest("Strings.Append (DS global)");
+
+  gbuf := "hello";
+  Strings.Append(" world", gbuf);
+  AssertStr(gbuf, "hello world", ErrAppend);
+
+  gbuf := "";
+  Strings.Append("abc", gbuf);
+  AssertStr(gbuf, "abc", ErrAppend);
+
+  gbuf := "abc";
+  Strings.Append("", gbuf);
+  AssertStr(gbuf, "abc", ErrAppend);
+
+  ReportTest
+END TestAppendGlobal;
+
+PROCEDURE TestInsertGlobal*;
+BEGIN
+  InitTest("Strings.Insert (DS global)");
+
+  gbuf := "helo";
+  Strings.Insert("l", 2, gbuf);
+  AssertStr(gbuf, "hello", ErrInsert);
+
+  gbuf := "world";
+  Strings.Insert("hello ", 0, gbuf);
+  AssertStr(gbuf, "hello world", ErrInsert);
+
+  gbuf := "hello";
+  Strings.Insert("!", 5, gbuf);
+  AssertStr(gbuf, "hello!", ErrInsert);
+
+  ReportTest
+END TestInsertGlobal;
+
+PROCEDURE TestDeleteGlobal*;
+BEGIN
+  InitTest("Strings.Delete (DS global)");
+
+  gbuf := "hello world";
+  Strings.Delete(gbuf, 5, 6);
+  AssertStr(gbuf, "hello", ErrDelete);
+
+  gbuf := "abcdef";
+  Strings.Delete(gbuf, 0, 3);
+  AssertStr(gbuf, "def", ErrDelete);
+
+  gbuf := "hello";
+  Strings.Delete(gbuf, 2, 0);
+  AssertStr(gbuf, "hello", ErrDelete);
+
+  ReportTest
+END TestDeleteGlobal;
+
+PROCEDURE TestReplaceGlobal*;
+BEGIN
+  InitTest("Strings.Replace (DS global)");
+
+  gbuf := "hello world";
+  Strings.Replace("there", 6, gbuf);
+  AssertStr(gbuf, "hello there", ErrReplace);
+
+  gbuf := "abcdef";
+  Strings.Replace("XY", 0, gbuf);
+  AssertStr(gbuf, "XYcdef", ErrReplace);
+
+  ReportTest
+END TestReplaceGlobal;
+
+PROCEDURE TestExtractGlobal*;
+BEGIN
+  InitTest("Strings.Extract (DS global)");
+
+  Strings.Extract("hello world", 6, 5, gdst);
+  AssertStr(gdst, "world", ErrExtract);
+
+  Strings.Extract("hello", 0, 3, gdst);
+  AssertStr(gdst, "hel", ErrExtract);
+
+  Strings.Extract("hello", 0, 0, gdst);
+  AssertStr(gdst, "", ErrExtract);
+
+  Strings.Extract("hello", 5, 3, gdst);
+  AssertStr(gdst, "", ErrExtract);
+
+  ReportTest
+END TestExtractGlobal;
 
 PROCEDURE RunAllTests*;
 BEGIN
@@ -223,6 +330,11 @@ BEGIN
   TestDelete;
   TestReplace;
   TestExtract;
+  TestAppendGlobal;
+  TestInsertGlobal;
+  TestDeleteGlobal;
+  TestReplaceGlobal;
+  TestExtractGlobal;
 
   PrintSummary
 END RunAllTests;

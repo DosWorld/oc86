@@ -86,7 +86,7 @@ BEGIN
   ReportTest
 END TestBasicArith;
 
-(* Test 2: LONGINT multiply via _S32MUL *)
+(* Test 2: LONGINT multiply via SYSTEM_S32MUL *)
 PROCEDURE TestMultiply*;
 VAR
   a, b, c: LONGINT;
@@ -103,7 +103,7 @@ BEGIN
   ReportTest
 END TestMultiply;
 
-(* Test 3: LONGINT division and mod via _S32DIV, _S32MOD *)
+(* Test 3: LONGINT division and mod via SYSTEM_S32DIV, SYSTEM_S32MOD *)
 PROCEDURE TestDivMod*;
 VAR
   a, b, c: LONGINT;
