@@ -80,9 +80,12 @@ static void gen_entry_stub(const char *mod_name, const char *proc_name,
 }
 
 /* Prepend directories from -L flags to OBERON_LIB environment variable.
-   Builds a new string: "dir1:dir2:existing_OBERON_LIB" and sets it. */
+   Builds a new string: "dir1:dir2:existing_OBERON_LIB" and sets it.
+   Uses static buffers to avoid large DOS stack allocations. */
 static void set_lib_path(const char **lib_dirs, int n_lib_dirs) {
-    char buf[4096];
+    /* Static: avoids large stack frame on 16-bit DOS (4KB stack limit). */
+    static char buf[512];
+    static char env_buf[528]; /* "OBERON_LIB=" + 512 + NUL */
     const char *existing;
     int i;
     int pos = 0;
@@ -100,12 +103,9 @@ static void set_lib_path(const char **lib_dirs, int n_lib_dirs) {
         strncpy(buf + pos, existing, sizeof(buf) - pos - 1);
     }
     buf[sizeof(buf)-1] = '\0';
-    /* putenv requires a persistent string; use a static buffer */
-    {
-        static char env_buf[4096];
-        snprintf(env_buf, sizeof(env_buf), "OBERON_LIB=%s", buf);
-        putenv(env_buf);
-    }
+    /* putenv requires a persistent string; env_buf is static */
+    snprintf(env_buf, sizeof(env_buf), "OBERON_LIB=%s", buf);
+    putenv(env_buf);
 }
 
 int main(int argc, char **argv) {

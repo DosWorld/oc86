@@ -6,6 +6,8 @@
 #include <string.h>
 #include <stdlib.h>
 
+#define sc pe_sc
+
 /* forward declaration — parse_system_intrinsic is defined after parse_factor */
 static void parse_system_intrinsic(Item *item, int id);
 

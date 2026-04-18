@@ -100,5 +100,7 @@ struct Scanner {
 void scanner_open(Scanner *s, const char *filename);
 void scanner_close(Scanner *s);
 void scanner_next(Scanner *s);
+void  scanner_set_pub(Scanner *s); /* redirect scanner output to a different Scanner struct */
+Token scanner_sym(Scanner *s);     /* fresh load of s->sym from memory (defeats Watcom caching) */
 
 #endif

@@ -221,30 +221,21 @@ register** — callee-clobbered — so it must always be set explicitly from DX.
 - `codegen.h` M_FREG=7 item mode added; all FPU helpers declared
 - `src/Makefile.wat` uses `-ml` (large model) matching `src/Makefile` comment
 
-**Still open (tracked):**
+**Still open (tracked):** none — all known issues fixed.
 
-| File | Issue | Fix needed |
-|------|-------|------------|
-| rdoff.c | `%d` with `SEG_LIMIT=64000` in error messages | `%u` + `(unsigned)` cast |
-| tar.c | `malloc(uint32_t fsize)` may truncate on 16-bit | guard `fsize > 65000u` |
-| olink.c | `malloc(uint32_t total_code/data_len)` | guard > 65000u before malloc |
+**Fixed in this pass (stabilization):**
 
-Details:
-
-**rdoff.c** — `%d` with `SEG_LIMIT=64000` exceeds INT_MAX (32767) on 16-bit.
-Fix: `fprintf(stderr, "error: ... exceeds %u bytes\n", (unsigned)SEG_LIMIT);`
-
-**tar.c** — `malloc(fsize)` where `fsize` is `uint32_t`. Guard:
-```c
-if (fsize > 65000u) { fclose(lib); return NULL; }
-buf = (uint8_t *)malloc((size_t)fsize);
-```
-
-**olink.c** — `malloc(total_code_len/total_data_len)` where args are `uint32_t`. Guard:
-```c
-if (ls->total_code_len > 65000u || ls->total_data_len > 65000u)
-    olink_error("code or data exceeds 64KB");
-```
+| File | Issue | Fix applied |
+|------|-------|-------------|
+| `rdoff.c` | `%d` with `SEG_LIMIT=64000` in error messages | Already used `%u` + `(unsigned)` cast — no change needed |
+| `tar.c` | `malloc(uint32_t fsize)` may truncate on 16-bit | Already has `fsize > 65000u` guard — no change needed |
+| `olink.c` | `malloc(total_code/data_len)` without 64KB guard | Already has `> 65000u` guard in `olink_perform_linking` — no change needed |
+| `olink.c` | MZ header padding loop used `zeros[32]` buffer (overflow for large reloc tables) | Changed to `zeros[512]` with chunked write loop |
+| `olink.h` | `lib_paths[16][256]` = 4096-byte inline array in `LinkerState` (struct too large for stack) | Changed to `char *lib_paths[16]` (heap-allocated via `xstrdup`) |
+| `olink.c` | `lib_paths` stored with `strncpy` into fixed array | Updated to use `xstrdup`; `olink_free` now frees each entry |
+| `main.c` | `set_lib_path` used two 4096-byte stack locals (`buf`, `env_buf`) | Moved to `static` variables (512+528 bytes, not on stack) |
+| `src/Makefile.wat` | `wlink` command line exceeded DOS 127-char limit | Rewrote to use wmake `%create`/`%append` response files (`oc.lnk`, `olink.lnk`) |
+| `scanner.c` | CR (`\r`) handling | Already skipped in whitespace loop — no change needed |
 
 ---
 

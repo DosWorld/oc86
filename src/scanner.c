@@ -42,15 +42,11 @@ static const struct { const char *name; Token tok; } kw[] = {
 };
 #define NKW (int)(sizeof(kw)/sizeof(kw[0]))
 
-typedef struct { const char *name; Token tok; } KW;
-
-static int kw_cmp(const void *key, const void *elem) {
-    return strcmp((const char*)key, ((const KW*)elem)->name);
-}
-
 static Token lookup_keyword(const char *s) {
-    KW *r = bsearch(s, kw, NKW, sizeof(kw[0]), kw_cmp);
-    return r ? r->tok : T_IDENT;
+    int i;
+    for (i = 0; i < NKW; i++)
+        if (strcmp(s, kw[i].name) == 0) return kw[i].tok;
+    return T_IDENT;
 }
 
 /* ---- private scanner state ---- */
@@ -65,7 +61,7 @@ typedef struct {
 } SC;
 
 static void readch(SC *sc) {
-    sc->ch = fgetc(sc->f);
+    do { sc->ch = fgetc(sc->f); } while (sc->ch == '\r');
     if (sc->ch == '\n') {
         sc->pub->line++;
         sc->pub->col = 0;
@@ -264,6 +260,16 @@ void scanner_close(Scanner *s) {
     if (gsc.f) { fclose(gsc.f); gsc.f=NULL; }
 }
 
+void scanner_set_pub(Scanner *s) {
+    gsc.pub = s;
+    s->cur_line = gsc.line_buf;
+}
+
+/* Force a fresh load of sym from memory — used to defeat Watcom -ox register caching. */
+Token scanner_sym(Scanner *s) { return s->sym; }
+int scanner_ch(void) { return gsc.ch; }
+long scanner_fpos(void) { return ftell(gsc.f); }
+
 void scanner_next(Scanner *s) {
     SC *sc = &gsc;
     int c;
@@ -273,8 +279,8 @@ void scanner_next(Scanner *s) {
         sc->pending_sym = -1;
         return;
     }
-    /* skip whitespace */
-    while (sc->ch==' '||sc->ch=='\t'||sc->ch=='\n'||sc->ch=='\r')
+    /* skip whitespace ('\r' already filtered by readch) */
+    while (sc->ch==' '||sc->ch=='\t'||sc->ch=='\n')
         readch(sc);
 
     if (sc->ch == EOF) { s->sym = T_EOF; return; }

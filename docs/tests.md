@@ -130,6 +130,7 @@ All sections 17–36 are implemented in `test_src.sh` and passing.
 | 44a–e   | TestAssert.Mod       | RunAllTests  | 5000000    | stdout line `Failed: 0`; 44e: ASSERT(FALSE) exits non-zero |
 | 45a–d   | TestSysIntrinsics.Mod| RunAllTests  | 5000000    | stdout line `Failed: 0`      |
 | 46a–d   | TestTypelessVar.Mod  | RunAllTests  | 5000000    | stdout line `Failed: 0`      |
+| 51a–d   | TestHello.mod        | RunAllTests  | 5000000    | stdout = `hello world`       |
 
 ### What each executable test covers
 
@@ -278,6 +279,8 @@ for all combinations tested by the byte-level section 37 tests.
 **TestSet.Mod** (section 50): SET type — literals, operators, and IN membership. Covers: `{}` (empty), `{e}` (single element), `{e1,e2,...}` (multi-element), `{lo..hi}` (range without spaces), SET `+` (union), `-` (difference), `*` (intersection), `/` (symmetric difference), `IN` with literal index, `IN` with variable index. 30 checks.
 
 **Section 50 — SET compile-level** (`test_src.sh`): `{}`, `{1,3,5}`, `3 IN s`, `a+b`, `a-b`, `a*b`, `a/b` all compile. 4 checks. Exe tests: compile with `-entry RunAllTests`, link, run, verify `Failed: 0`. 4 checks.
+
+**TestHello.mod** (section 51): Command-line argument printing — `RunAllTests` iterates `Dos.ARGCOUNT()` args starting at index 1 (skipping the empty argv[0] slot), printing each separated by a space and terminated with a newline. Run with `xt run testhello.exe hello world`; expected stdout is `hello world`. Tests `Dos.ARGCOUNT()` and `Dos.ARG()` at runtime with the `xt` emulator passing real command-line arguments.
 
 ---
 

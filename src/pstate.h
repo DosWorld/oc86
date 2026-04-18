@@ -15,6 +15,7 @@ extern int      pe_mod_uses_fpu;/* set when REAL/LONGREAL appears */
 
 /* Helpers defined in parser.c, used by pexpr.c */
 void pe_error(const char *msg);
+void pe_error2(const char *msg, const char *name);
 void pe_expect(Token t);
 int  pe_get_system_import(const char *name);
 void pe_emit_push_static_link(int def_level);

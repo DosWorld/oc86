@@ -562,6 +562,7 @@ void olink_free(LinkerState *ls)
     TModule     *m, *mn;
     TSymbol     *s, *sn;
     TMZReloc    *r, *rn;
+    int i;
 
     for (m = ls->mod_head; m; m = mn) {
         mn = m->next;
@@ -576,6 +577,9 @@ void olink_free(LinkerState *ls)
     for (r = ls->reloc_head; r; r = rn) {
         rn = r->next;
         free(r);
+    }
+    for (i = 0; i < ls->n_lib_paths; i++) {
+        free(ls->lib_paths[i]);
     }
     free(ls->code_buf);
     free(ls->data_buf);
@@ -1100,9 +1104,13 @@ void olink_write_exe(LinkerState *ls, const char *out_filename)
 
     /* pad header to hdr_para * 16 bytes */
     {
-        static const uint8_t zeros[32] = {0};
+        static const uint8_t zeros[512] = {0};
         long gap = (long)hdr_para * 16 - ftell(fout);
-        if (gap > 0) fwrite(zeros, 1, (size_t)gap, fout);
+        while (gap > 0) {
+            size_t chunk = (gap > 512) ? 512 : (size_t)gap;
+            fwrite(zeros, 1, chunk, fout);
+            gap -= (long)chunk;
+        }
     }
 
     /* code segments (all modules concatenated, paragraph-aligned gaps zero-filled) */
@@ -1184,8 +1192,7 @@ int main(int argc, char **argv)
     for (i = 1; i < argc - 1; i++) {
         if (strcmp(argv[i], "-L") == 0 && i + 1 < argc - 1) {
             if (ls.n_lib_paths < 16) {
-                strncpy(ls.lib_paths[ls.n_lib_paths], argv[i + 1], 255);
-                ls.lib_paths[ls.n_lib_paths][255] = '\0';
+                ls.lib_paths[ls.n_lib_paths] = xstrdup(argv[i + 1]);
                 ls.n_lib_paths++;
             }
             i++;

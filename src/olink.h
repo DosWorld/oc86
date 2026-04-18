@@ -79,8 +79,8 @@ typedef struct {
     uint16_t     entry_cs_para;   /* code paragraph of the module owning "start" (0-based from code start) */
     int          entry_found;
 
-    /* extra library search paths (-L) */
-    char         lib_paths[16][256];
+    /* extra library search paths (-L): heap-allocated, max 16 paths */
+    char        *lib_paths[16];
     int          n_lib_paths;
 
     /* group ID counter: each .om file (or standalone .rdf) gets a unique group */

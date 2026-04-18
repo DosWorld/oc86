@@ -49,7 +49,7 @@ void parser_syscomment(Scanner *s, char directive, const char *arg) {
                 s->filename, s->line, directive, s->cur_line);
     }
 }
-Scanner *pe_sc;                  /* shared with pexpr.c via pstate.h */
+Scanner *pe_sc;                  /* current scanner, set by parse_module */
 static char cur_mod[NAME_LEN];   /* current module name (set by parse_module) */
 int pe_mod_uses_fpu = 0;         /* shared with pexpr.c via pstate.h */
 
@@ -99,14 +99,34 @@ int pe_get_system_import(const char *name) {
     return rdf_add_import(&cg_obj, name);
 }
 
+void pe_error2(const char *msg, const char *name) {
+    if (pe_sc && pe_sc->filename)
+        fprintf(stderr, "%s(%d): %s: '%s'\n%s\n",
+                pe_sc->filename, pe_sc->line, msg, name,
+                pe_sc->cur_line ? pe_sc->cur_line : "");
+    else
+        fprintf(stderr, "(?): %s: '%s'\n", msg, name);
+    parser_errors++;
+}
+
 void pe_error(const char *msg) {
-    fprintf(stderr, "%s(%d): %s\n%s\n",
-            pe_sc->filename, pe_sc->line, msg, pe_sc->cur_line);
+    if (pe_sc && pe_sc->filename)
+        fprintf(stderr, "%s(%d): %s\n%s\n",
+                pe_sc->filename, pe_sc->line, msg,
+                pe_sc->cur_line ? pe_sc->cur_line : "");
+    else
+        fprintf(stderr, "(?): %s\n", msg);
     parser_errors++;
 }
 void pe_expect(Token t) {
-    if (pe_sc->sym == t) scanner_next(pe_sc);
-    else pe_error("unexpected token");
+    if (pe_sc && pe_sc->sym == t) { scanner_next(pe_sc); return; }
+    if (pe_sc && pe_sc->filename)
+        fprintf(stderr, "%s(%d): expected token %d, got %d\n%s\n",
+                pe_sc->filename, pe_sc->line, (int)t, (int)(pe_sc->sym),
+                pe_sc->cur_line ? pe_sc->cur_line : "");
+    else
+        fprintf(stderr, "(?): expected token %d\n", (int)t);
+    parser_errors++;
 }
 
 /* Convenience aliases used within parser.c itself */
@@ -118,8 +138,8 @@ void pe_expect(Token t) {
 #define emit_push_static_link(d) pe_emit_push_static_link(d)
 
 /* ---- forward declarations ---- */
-static void parse_stat_seq(TypeDesc *ret_type);
-static void parse_type(TypeDesc **out);
+void parse_stat_seq(TypeDesc *ret_type);
+void parse_type(TypeDesc **out);
 void pe_parse_type(TypeDesc **out);
 
 /* Forward references within TYPE declaration section:
@@ -133,7 +153,7 @@ static int n_fwd_refs = 0;
 /* ================================================================
    STATEMENTS
    ================================================================ */
-static void parse_if_stat(TypeDesc *ret_type) {
+void parse_if_stat(TypeDesc *ret_type) {
     Backpatch end_patches[64]; int n_end=0; int i;
     Item cond;
     Backpatch jf;
@@ -155,7 +175,7 @@ static void parse_if_stat(TypeDesc *ret_type) {
     for (i=0;i<n_end;i++) cg_patch_near(&end_patches[i]);
 }
 
-static void parse_while_stat(TypeDesc *ret_type) {
+void parse_while_stat(TypeDesc *ret_type) {
     /* Oberon-07 extended WHILE:
          WHILE g1 DO s1 ELSIF g2 DO s2 ... END
        All guards are re-evaluated from the top on each iteration.
@@ -188,7 +208,7 @@ static void parse_while_stat(TypeDesc *ret_type) {
     expect(T_END);
 }
 
-static void parse_repeat_stat(TypeDesc *ret_type) {
+void parse_repeat_stat(TypeDesc *ret_type) {
     uint16_t loop_top;
     Item cond;
     scanner_next(sc);
@@ -202,7 +222,7 @@ static void parse_repeat_stat(TypeDesc *ret_type) {
 
 /* parse_const_label: parse a constant integer label value.
    Handles negative literals (T_MINUS T_INT) and named constants. */
-static int parse_const_label(void) {
+int parse_const_label(void) {
     int neg = 0, val = 0;
     if (sc->sym == T_MINUS) { neg = 1; scanner_next(sc); }
     if (sc->sym == T_INT) {
@@ -225,7 +245,7 @@ static int parse_const_label(void) {
    Strategy: store case expr in hidden local, then for each arm emit
    a chain of comparisons that jump into the arm body on match.
    After arm body, jump to END. */
-static void parse_case_stat(TypeDesc *ret_type) {
+void parse_case_stat(TypeDesc *ret_type) {
     Symbol *case_sym;
     Item case_load;
     Backpatch end_patches[64]; int n_end = 0, i;
@@ -304,7 +324,7 @@ static void parse_case_stat(TypeDesc *ret_type) {
     for (i = 0; i < n_end; i++) cg_patch_near(&end_patches[i]);
 }
 
-static void parse_for_stat(TypeDesc *ret_type) {
+void parse_for_stat(TypeDesc *ret_type) {
     Symbol *var;
     Symbol *lim_sym;
     Item init;
@@ -377,7 +397,7 @@ static void parse_for_stat(TypeDesc *ret_type) {
     expect(T_END);
 }
 
-static void parse_return_stat(TypeDesc *ret_type) {
+void parse_return_stat(TypeDesc *ret_type) {
     Item val;
     scanner_next(sc);
     if (sc->sym!=T_SEMI && sc->sym!=T_END &&
@@ -393,7 +413,7 @@ static void parse_return_stat(TypeDesc *ret_type) {
         error("too many RETURN statements (max 64)");
 }
 
-static void parse_sysproc_call(int id) {
+void parse_sysproc_call(int id) {
     expect(T_LPAREN);
     switch (id) {
     case SP_NEW: {
@@ -553,7 +573,7 @@ static void parse_sysproc_call(int id) {
     expect(T_RPAREN);
 }
 
-static void parse_statement(TypeDesc *ret_type) {
+void parse_statement(TypeDesc *ret_type) {
     if (sc->sym == T_IDENT) {
         Symbol *sym = sym_find(sc->id);
         Item item;
@@ -692,7 +712,7 @@ static void parse_statement(TypeDesc *ret_type) {
     /* empty statement: do nothing */
 }
 
-static void parse_stat_seq(TypeDesc *ret_type) {
+void parse_stat_seq(TypeDesc *ret_type) {
     parse_statement(ret_type);
     while (sc->sym==T_SEMI) { scanner_next(sc); parse_statement(ret_type); }
 }
@@ -715,7 +735,7 @@ static int32_t parse_array_dim(void) {
 /* ================================================================
    TYPES
    ================================================================ */
-static void parse_type(TypeDesc **out) {
+void parse_type(TypeDesc **out) {
     Symbol *sym;
     Symbol *tsym;
     int32_t len;
@@ -881,14 +901,14 @@ void pe_parse_type(TypeDesc **out) { parse_type(out); }
 /* ================================================================
    DECLARATIONS
    ================================================================ */
-static void parse_const_decl(void) {
+void parse_const_decl(void) {
     char name[NAME_LEN];
     int exported;
     Item val;
     Symbol *s;
     while (sc->sym==T_IDENT) {
         strncpy(name,sc->id,NAME_LEN-1); scanner_next(sc);
-        if (sym_find_local(name)) error("duplicate identifier");
+        if (sym_find_local(name)) { pe_error2("duplicate identifier", name); }
         exported = 0; if (sc->sym==T_STAR) { exported=1; scanner_next(sc); }
         expect(T_EQL);
         parse_expr(&val);
@@ -896,12 +916,12 @@ static void parse_const_decl(void) {
         s->exported = exported;
         s->type = val.type;
         s->val  = (val.mode==M_CONST) ? val.val : 0;
-        s->adr  = (val.mode==M_CONST) ? val.adr : 0; /* preserve data-seg offset for REAL consts */
+        s->adr  = (val.mode==M_CONST) ? val.adr : 0;
         if (sc->sym==T_SEMI) scanner_next(sc);
     }
 }
 
-static void parse_type_decl(void) {
+void parse_type_decl(void) {
     char name[NAME_LEN];
     int exported;
     TypeDesc *placeholder;
@@ -912,7 +932,7 @@ static void parse_type_decl(void) {
     n_fwd_refs = 0;
     while (sc->sym==T_IDENT) {
         strncpy(name,sc->id,NAME_LEN-1); scanner_next(sc);
-        if (sym_find_local(name)) error("duplicate identifier");
+        if (sym_find_local(name)) { pe_error2("duplicate identifier", name); }
         exported=0; if (sc->sym==T_STAR) { exported=1; scanner_next(sc); }
         /* Pre-register name so self-references (e.g. POINTER TO T) resolve.
            Give placeholder pointer-sized dimensions so self-referential pointer
@@ -925,7 +945,7 @@ static void parse_type_decl(void) {
         expect(T_EQL);
         t = type_integer; parse_type(&t);
         /* Patch placeholder in-place so any captured pointers see the real type. */
-        *placeholder = *t;
+        memcpy(placeholder, t, sizeof(*placeholder));
         if (sc->sym==T_SEMI) scanner_next(sc);
     }
     /* Resolve forward references: POINTER TO <name> where name was not yet declared. */
@@ -941,7 +961,7 @@ static void parse_type_decl(void) {
     n_fwd_refs = 0;
 }
 
-static void parse_var_decl(void) {
+void parse_var_decl(void) {
     while (sc->sym==T_IDENT) {
         char names[16][NAME_LEN]; int exported_flags[16]; int n=0; int i;
         TypeDesc *t;
@@ -957,7 +977,7 @@ static void parse_var_decl(void) {
         expect(T_COLON);
         t = type_integer; parse_type(&t);
         for (i=0;i<n;i++) {
-            if (sym_find_local(names[i])) error("duplicate identifier");
+            if (sym_find_local(names[i])) { pe_error2("duplicate identifier", names[i]); }
             s = sym_new(names[i], K_VAR);
             s->exported = exported_flags[i];
             s->type = t;
@@ -977,9 +997,9 @@ static void parse_var_decl(void) {
     }
 }
 
-static void parse_proc_decl(void);
+void parse_proc_decl(void);
 
-static void parse_decl_seq(void) {
+void parse_decl_seq(void) {
     while (sc->sym==T_CONST || sc->sym==T_TYPE ||
            sc->sym==T_VAR   || sc->sym==T_PROCEDURE) {
         if      (sc->sym==T_CONST)     { scanner_next(sc); parse_const_decl(); }
@@ -989,7 +1009,7 @@ static void parse_decl_seq(void) {
     }
 }
 
-static void parse_proc_decl(void) {
+void parse_proc_decl(void) {
     char name[NAME_LEN];
     Symbol *sym;
     int exported;
