@@ -1,10 +1,10 @@
-# MANUAL — Oberon-07 dialect (oberonc)
+# MANUAL — Oberon-07 dialect
 
 ## Purpose
-This manual documents the Oberon-07 dialect implemented by the `oberonc` compiler and describes the associated tools (`oc`, `olink`), the FAR/NEAR calling model, pointer conventions, and typed-variable semantics used by this toolchain. It targets compiler users and library authors who need ABI, linking, and assembly-library guidance.
+This manual documents the Oberon-07 dialect implemented by the `oc86` compiler and describes the associated tools (`oc`, `olink`), the FAR/NEAR calling model, pointer conventions, and typed-variable semantics used by this toolchain. It targets compiler users and library authors who need ABI, linking, and assembly-library guidance.
 
 ## 1. Dialect overview and notable extensions
-This compiler implements an Oberon-07 dialect with a few deliberate extensions and target-specific ABI details. The following describes the language structure, common declarations, scoping rules, and dialect differences you must know when writing source for `oberonc`.
+This compiler implements an Oberon-07 dialect with a few deliberate extensions and target-specific ABI details. The following describes the language structure, common declarations, scoping rules, and dialect differences you must know when writing source for `oc86`.
 
 ### Modules and imports
 - Source unit: `MODULE Name; IMPORT ...; ... END Name.` Modules group declarations and a single optional BEGIN/END body.
