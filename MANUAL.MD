@@ -206,4 +206,4 @@ Notes:
 - FPU errors: if code uses FPU ensure SYSTEM_REQUIRE87 is available or avoid floating point.
 
 ## License and contact
-License in LICENSE.TXT.
+Public domain. License in LICENSE.TXT.

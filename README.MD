@@ -71,4 +71,4 @@ Documentation
 
 License
 -------
-See LICENSE.TXT in the repository root.
+Public domain. See LICENSE.TXT in the repository root.
