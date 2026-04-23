@@ -1,13 +1,9 @@
-MANUAL — Oberon-07 dialect (oberonc)
+MANUAL — Oberon-07
 =====================================
-
-Purpose
--------
-This manual documents the Oberon-07 dialect implemented by the `oberonc` compiler and describes the associated tools (`oc`, `olink`), the FAR/NEAR calling model, pointer conventions, and typed-variable semantics used by this toolchain. It targets compiler users and library authors who need ABI, linking, and assembly-library guidance.
 
 1. Dialect overview and notable extensions
 -----------------------------------------
-This compiler implements an Oberon-07 dialect with a few deliberate extensions and target-specific ABI details. The following describes the language structure, common declarations, scoping rules, and dialect differences you must know when writing source for `oberonc`.
+This compiler implements an Oberon-07 dialect with a few deliberate extensions and target-specific ABI details. The following describes the language structure, common declarations, scoping rules, and dialect differences you must know when writing source for `oc86`.
 
 Modules and imports
 - Source unit: `MODULE Name; IMPORT ...; ... END Name.` Modules group declarations and a single optional BEGIN/END body.
@@ -20,12 +16,11 @@ Declarations and scope
 Types and variables
 - Built-in types: INTEGER, BOOLEAN, CHAR, BYTE, SET (16-bit), ADDRESS (far pointer), LONGINT (32-bit), REAL (32-bit), LONGREAL (64-bit).
 - ARRAY and RECORD support; forward `POINTER TO` references are allowed within a TYPE section and patched later.
-- Type synonyms: FLOAT -> REAL; ENTIER -> FLOOR.
 
 Procedures and calling convention
 - PROCEDURE declarations may be annotated with `*` (export) and context-sensitive `FAR`/`NEAR` modifiers. Exported procs are FAR by default.
 - Nested (inner) procedures receive a hidden static-link argument (SL) enabling uplevel variable access. SL changes BP-relative offsets of parameters and locals.
-- VAR parameters are passed as 4-byte far addresses. Non-VAR open-array formals use a 6-byte slot {offset,segment,LEN}.
+- VAR parameters are passed as 4-byte far addresses. Open-array formals use a 6-byte slot {offset,segment,LEN}.
 
 Expressions and coercion
 - Standard Oberon expression rules apply. Mixed INTEGER/REAL or INTEGER/LONGREAL operands are coerced automatically to the floating type for expression evaluation (FPU), but assignments require explicit casts when converting to a narrower target.
@@ -54,7 +49,7 @@ For authoritative grammar and small syntactic details, consult docs/oberon07.ebn
 - `-SYSTEM` disables the implicit SYSTEM import (used only when compiling the SYSTEM module itself).
 - Use `(*$L path.rdf*)` in source to include extra .rdf files into the .om. This is the simplest and recommended way to package hand-built .rdf into an .om: write a small .Mod containing the `$L` directive and compile it with `oc` to produce an .om that contains the .rdf.
 
-3. olink (smart linker) summary
+3. olink linker summary
 --------------------------------
 - Input: `.om` archives only (ustar). Standalone `.rdf` are rejected.
 - Smart reachability: starts from `start` (MAIN.RDF) and marks reachable modules; only reachable code emitted.
