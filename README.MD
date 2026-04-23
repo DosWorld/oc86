@@ -3,7 +3,7 @@ oberonc — Oberon-07 compiler (C89) targeting MS-DOS real mode
 
 Summary
 -------
-oberonc is a small Oberon-07 compiler (C89) that produces RDOFF2 object files and `.om` archives suitable for linking into DOS MZ executables with `olink`. The project targets the MS-DOS real-mode large memory model (CS≠DS≠SS) and is designed to be portable between GCC/Clang (host) and Open Watcom (DOS large model).
+oc86 is a small Oberon-07 compiler (C89) that produces RDOFF2 object files and `.om` archives suitable for linking into DOS MZ executables with `olink`. The project targets the MS-DOS real-mode large memory model (CS≠DS≠SS) and is designed to be portable between GCC/Clang (host) and Open Watcom (DOS large model).
 
 Key features
 ------------
