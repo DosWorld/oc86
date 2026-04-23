@@ -18,7 +18,6 @@ This compiler implements an Oberon-07 dialect with a few deliberate extensions a
 ### Types and variables
 - Built-in types: INTEGER, BOOLEAN, CHAR, BYTE, SET (16-bit), ADDRESS (far pointer), LONGINT (32-bit), REAL (32-bit), LONGREAL (64-bit).
 - ARRAY and RECORD support; forward `POINTER TO` references are allowed within a TYPE section and patched later.
-- Type synonyms: FLOAT -> REAL; ENTIER -> FLOOR.
 
 ### Procedures and calling convention
 - PROCEDURE declarations may be annotated with `*` (export) and context-sensitive `FAR`/`NEAR` modifiers. Exported procs are FAR by default.
@@ -198,7 +197,6 @@ Notes:
 - Parameters are read from the callee frame: FAR procs params start at BP+6 (first param at +6, second at +8).
 - Return value for INTEGER is returned in AX.
 - The assembler must export the symbol named exactly as the linker will look it up (`MyLib_Add`).
-- A .def file is not required. Using the $L directive is the simplest way to include the .rdf in the .om so olink can resolve imports.
 
 ## 9. Examples and references
 - See `src-lib/SYS.RDF` (checked-in binary) and `src-lib/SYS.ASM` for a real-world example of hand-assembled RDOFF2 objects and how they are packed into libraries.
