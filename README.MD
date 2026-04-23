@@ -1,15 +1,13 @@
-oc86 — Oberon-07 compiler targeting MS-DOS real mode
+Oberon-07 compiler targeting MS-DOS real mode
 ==============================================================
 
-Summary
--------
 oc86 is a small Oberon-07 compiler (in C89) that produces RDOFF2 object files and `.om` archives suitable for linking into DOS MZ executables with `olink`. The project targets the MS-DOS real-mode large memory model (CS<>DS<>SS) and is designed to be portable between GCC/Clang (host) and Open Watcom (DOS large model).
 
 Key features
 ------------
 - Oberon-07 dialect with practical extensions (typeless VAR, open-array ABI, system comment directives).
 - Generates RDOFF2 `.rdf` + `.def` and packs into `.om` archives.
-- Smart linker `olink` that emits DOS MZ executables and performs reachability-based linking.
+- Linker `olink` that emits DOS MZ executables and performs reachability-based linking.
 - x87 FPU support for REAL/LONGREAL and large-model 16-bit portability rules.
 
 Getting started
