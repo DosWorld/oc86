@@ -4,7 +4,7 @@
 #include <string.h>
 #include <ctype.h>
 
-/* ---- keyword table (must stay sorted for bsearch) ---- */
+/* ---- keyword table ---- */
 static const struct { const char *name; Token tok; } kw[] = {
     {"ARRAY",     T_ARRAY},
     {"BEGIN",     T_BEGIN},

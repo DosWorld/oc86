@@ -129,7 +129,7 @@ static void write_u16(FILE *f, uint16_t v)
     uint8_t b[2];
     b[0] = (uint8_t)(v & 0xFF);
     b[1] = (uint8_t)((v >> 8) & 0xFF);
-    fwrite(b, 1, 2, f);
+    if (fwrite(b, 1, 2, f) != 2) olink_error("write error");
 }
 
 static void read_u16_buf(const uint8_t *buf, uint16_t *out)
@@ -354,22 +354,28 @@ static void patch_mem(LinkerState *ls, uint8_t seg_type, uint32_t offset,
                       int32_t val, uint8_t width)
 {
     uint8_t *p;
-    uint16_t w;
+    uint16_t cur;
 
-    if (seg_type == SEG_CODE)
+    if (seg_type == SEG_CODE) {
+        if (offset + (uint32_t)width > ls->total_code_len) olink_error("patch out of bounds");
         p = ls->code_buf + offset;
-    else
+    } else {
+        if (offset + (uint32_t)width > ls->total_data_len) olink_error("patch out of bounds");
         p = ls->data_buf + offset;
+    }
 
     switch (width) {
     case 1:
-        *p = (uint8_t)((int)*p + (int)(val & 0xFF));
+        p[0] = (uint8_t)((p[0] + (uint8_t)(val & 0xFF)) & 0xFF);
         break;
     case 2:
-        memcpy(&w, p, 2);
-        w = (uint16_t)(w + (uint16_t)(val & 0xFFFF));
-        memcpy(p, &w, 2);
+        cur = (uint16_t)(p[0] | ((uint16_t)p[1] << 8));
+        cur = (uint16_t)(cur + (uint16_t)(val & 0xFFFF));
+        p[0] = (uint8_t)(cur & 0xFF);
+        p[1] = (uint8_t)((cur >> 8) & 0xFF);
         break;
+    default:
+        olink_error("unsupported patch width");
     }
 }
 
