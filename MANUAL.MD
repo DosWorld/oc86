@@ -1,5 +1,4 @@
 # MANUAL — Oberon-07 dialect (oberonc)
-=====================================
 
 ## Purpose
 This manual documents the Oberon-07 dialect implemented by the `oberonc` compiler and describes the associated tools (`oc`, `olink`), the FAR/NEAR calling model, pointer conventions, and typed-variable semantics used by this toolchain. It targets compiler users and library authors who need ABI, linking, and assembly-library guidance.
