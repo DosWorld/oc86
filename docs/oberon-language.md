@@ -88,11 +88,15 @@ are equal (as in tiny/small/compact models) is WRONG for this target.
    `cg_load_item`, then `MOV ES,DX; MOV BX,AX`; access via `ES:[BX]`.
    DS is never modified.
 
-4. **`SYSTEM.MOVE(src, dst, n)` / `SYSTEM.FILL(dst, n, byte)`**: src and dst are
-   full `ADDRESS` values (any segment — heap, stack, data).  `MOVE`: saves DS
-   via `PUSH DS`, sets `DS=src_seg`, runs `REP MOVSB` (DS:SI→ES:DI), then
-   `POP DS` to restore.  `FILL`: sets `ES=dst_seg`, `DI=dst_ofs`, runs `REP STOSB`;
-   DS is never modified.
+4. **`SYSTEM.MOVE(src, dst: ADDRESS; n: INTEGER)` / `SYSTEM.FILL(dst: ADDRESS; n: INTEGER; b: BYTE)`**:
+   Implemented as INLINE procedures in `SYSTEM.mod` (POP-based value mode).
+   Caller pushes actual argument values via `parse_actual_params`; the inline byte
+   pattern POPs them into registers and runs `REP MOVSB` / `REP STOSB`.
+   `MOVE`: POPs n→CX, dst_ofs→DI, dst_seg→ES, src_ofs→SI, src_seg→AX;
+   then `PUSH DS; MOV DS,AX; CLD; REP MOVSB; POP DS` — DS restored.
+   `FILL`: POPs b→AX, n→CX, dst_ofs→DI, dst_seg→ES; then `CLD; REP STOSB`.
+   SP is balanced (all pushed values consumed by POPs).  Both accept any segment
+   (heap, stack, data).  No C-side codegen — no `SP_MOVE`/`SP_FILL` constants.
 
 5. **`SYSTEM.SEG(v)`**: returns SS for locals, DS for globals.
 
@@ -140,6 +144,10 @@ TF_LONGREAL=15/* 64-bit float; FPU FLD/FSTP qword */
 
 Note: TF_ADDRESS=11 is SYSTEM.ADDRESS (4-byte far pointer, compatible with any POINTER or LONGINT).
 TF value 13 is reserved.
+
+**CRITICAL — token vs type-form constants must never be mixed:**
+`T_xxx` in `scanner.h` are TOKEN constants; `TF_xxx` in `symbols.h` are TYPE FORM constants.
+`T_ARRAY=50`, `TF_ARRAY=7`; `T_RECORD=73`, `TF_RECORD=8`; `T_POINTER=71`, `TF_POINTER=9` — completely different numbers.
 
 **Multi-dimensional array syntax:** `ARRAY m, n OF T` is parsed and automatically desugared
 to `ARRAY m OF ARRAY n OF T` (nested arrays). Up to 7 dimensions supported. The resulting
@@ -904,85 +912,68 @@ SYSTEM_Free     — FAR; arg: p:POINTER; returns nothing
 Note: SYSTEM_Intr contains `INT 0`, but it is self-modified code - interrupt number will be patched
 in call time.
 
-### SYSTEM compiler intrinsics
-
-Built into compiler — NOT in SYSTEM.def, NOT linked externally.
+### SYSTEM intrinsics
 
 **Type:** `SYSTEM.ADDRESS` (TF_ADDRESS, size 4) — compatible with any POINTER.
 
-**Expression intrinsics:**
+**INLINE procedures in SYSTEM.mod** (resolved from SYSTEM.om, typeless VAR push):
 
-| Intrinsic | Returns | Description |
-|-----------|---------|-------------|
-| `SYSTEM.ADR(v)` | ADDRESS | Far address of v; `ADR(n^)` = value of pointer `n` (see below) |
-| `SYSTEM.VAL(T, expr)` | T | Reinterpret bits; sizes must match |
-| `SYSTEM.PTR(s, o)` | ADDRESS | Construct far pointer from seg:ofs |
-| `SYSTEM.SEG(v)` | INTEGER | Segment of v; `SEG(n^)` = segment of pointer `n` |
-| `SYSTEM.OFS(v)` | INTEGER | Offset of v; `OFS(n^)` = offset of pointer `n` |
-| `SYSTEM.LSL(x, n)` | INTEGER | Logical shift left |
-| `SYSTEM.LSR(x, n)` | INTEGER | Logical shift right |
-| `SYSTEM.ASR(x, n)` | INTEGER | Arithmetic shift right |
-| `SYSTEM.ROR(x, n)` | INTEGER | Rotate right |
+All of ADR/SEG/OFS/PUT/PTR/MOVE/FILL are INLINE procedures in SYSTEM.mod using typeless
+VAR params. `parse_actual_params` computes the far address of each actual variable and
+pushes `{segment, offset}` = 4 bytes; the INLINE byte pattern then POPs them.
 
-**SYSTEM.ADR argument forms:**
+| Intrinsic | Signature | Bytes | Description |
+|-----------|-----------|-------|-------------|
+| `SYSTEM.ADR(v)` | `VAR v): ADDRESS` | `58 5A` | Far address of `v`; result DX:AX={seg,ofs} |
+| `SYSTEM.SEG(v)` | `VAR v): INTEGER` | `58 58` | Segment of `v` (SS for locals, DS for globals, heap seg for `p^`) |
+| `SYSTEM.OFS(v)` | `VAR v): INTEGER` | `58 59` | Offset of `v` within its segment |
+| `SYSTEM.PTR(s, o)` | `s, o: INTEGER): ADDRESS` | `58 5A` | Construct far pointer from seg `s` and ofs `o` |
+| `SYSTEM.PUT(a, x)` | `a: ADDRESS; x: INTEGER` | `58 5B 07 26 89 07` | Write word `x` to far pointer `a` |
+| `SYSTEM.MOVE(src, dst, n)` | `VAR src, dst; n: INTEGER` | `59 5F 07 5E 58 1E 8E D8 FC F3 A4 1F` | Copy `n` bytes from `src` to `dst` |
+| `SYSTEM.FILL(dst, n, b)` | `VAR dst; n: INTEGER; b: BYTE` | `58 59 5F 07 FC F3 AA` | Fill `n` bytes at `dst` with byte `b` |
 
-`SYSTEM.ADR(v)` accepts any of the following:
+Invariants: `ADR(n^) = n`; `SEG(n^) = SEG(n)`; `OFS(n^) = OFS(n)`; `ADR(v) = PTR(SEG(v), OFS(v))`.
 
-| Argument form | Segment | Codegen |
-|---------------|---------|---------|
-| Global variable, array, or record | DS | `LEA AX,[ofs]` (8D 06 ofs) |
-| Global array element `gArr[i]` | DS | `MOV AX,BX` + `MOV DX,ES` after index |
-| Global record field `gRec.f` | DS | `LEA AX,[ofs]` with field offset |
-| Local variable, array, or record | SS | `LEA AX,[BP+ofs]` |
-| Local array element `a[i]` | SS | `MOV AX,BX` + `MOV DX,ES` after index |
-| Local record field `r.f` | SS | `LEA AX,[BP+ofs]` with field offset |
-| Non-VAR parameter `p` | SS | `LEA AX,[BP+ofs]` — address of the parameter slot |
-| VAR parameter `v` | caller's segment | `MOV AX,[BP+ofs]` — offset word from the far ptr |
-| Uplevel variable (nested proc) | SS | `cg_sl_load_bx(hops)` then `LEA AX,[BX+ofs]` |
-| Procedure name `P` | CS | `MOV AX,ofs` + CODE reloc (linker patches) |
-| Pointer deref `n^` | — | `MOV AX,BX` + `MOV DX,ES` → `DX:AX` = value of `n` |
+`SYSTEM.ADR` also accepts procedure names: `SYSTEM.ADR(ProcName)` returns the far code address `CS:code_offset`.
 
-Notes:
-- Large model: DS ≠ SS. Global vars are DS-relative; locals/parameters are SS-relative.
-- For indexed array elements and pointer derefs, the designator sets ES:BX; ADR returns the full far pointer `DX:AX = ES:BX`.
-- **Invariant**: `ADR(n^) = n` — the address of a dereferenced pointer equals the pointer itself.
-- For record fields, the ADR is computed from the record base plus field offset.
-- Record base addresses include the 4-byte tag slot: first field is at record_base + 4.
-- Procedure ADR emits a code-segment relocation; the linker patches the correct offset.
-- ADR of an uplevel variable in a nested procedure traverses the static link chain.
-- `ADR(nonVarParam)` returns the SS-relative address of the parameter's stack slot.
-- `ADR(varParam)` returns the offset word of the far pointer passed by the caller;
-  the segment is the caller's segment (DS for globals, SS for locals).
-- **SYSTEM.PUT/GET accept any ADDRESS** — use `SYSTEM.ADR(v)` to obtain the full far
-  pointer (segment:offset); all segments (DS, SS, heap) are valid.
+**Typeless VAR push — what gets pushed for each argument form:**
 
-**SYSTEM.SEG / SYSTEM.OFS on pointer dereference:**
+| Argument form | Emitted push | Stack result |
+|---------------|-------------|--------------|
+| Global var/field/array `g` | `LEA AX,[g_ofs]+RELOC; PUSH DS; PUSH AX` | `{g_ofs, DS}` |
+| Local var/field/array `x` | `LEA AX,[BP+ofs]; PUSH SS; PUSH AX` | `{BP-ofs, SS}` |
+| VAR param `v` (is_ref) | copy slot: `MOV AX,[BP+ofs+2]; PUSH; MOV AX,[BP+ofs]; PUSH` | caller's `{seg, ofs}` |
+| Uplevel var (nested proc) | `cg_sl_addr_ax(hops, ofs); PUSH SS; PUSH AX` | `{outer-ofs, SS}` |
+| Pointer deref / array elem `p^` | `PUSH ES; MOV AX,BX; PUSH AX` | `{BX, ES}` = `{ofs, seg}` of pointed-to location |
+| Procedure name `P` | `PUSH CS; MOV AX,ofs+CODE_RELOC; PUSH AX` | `{code_ofs, CS}` = far code address |
 
-`SEG(n^)` and `OFS(n^)` return the segment and offset of the pointer value `n`, not of the pointed-to object. After `n^` the designator leaves ES:BX = value of `n`; `SEG(n^)` emits `MOV AX,ES` (`8C C0`); `OFS(n^)` emits `MOV AX,BX` (`8B C3`). Invariants: `SEG(n^) = SEG(n)`, `OFS(n^) = OFS(n)`.
+**Expression intrinsics (compiler built-in, cannot be INLINE):**
 
-**Statement intrinsics:**
+| Intrinsic | Returns | Why compiler built-in |
+|-----------|---------|----------------------|
+| `SYSTEM.VAL(T, expr)` | T | First arg is a TYPE, not an expression |
+| `SYSTEM.LSL(x, n)` | INTEGER/LONGINT | Type-dispatch (INTEGER vs LONGINT) + const vs variable shift |
+| `SYSTEM.LSR(x, n)` | INTEGER/LONGINT | Same |
+| `SYSTEM.ASR(x, n)` | INTEGER/LONGINT | Same |
+| `SYSTEM.ROR(x, n)` | INTEGER/LONGINT | Same |
 
-| Intrinsic | Signature | Description |
-|-----------|-----------|-------------|
-| `SYSTEM.GET(a, var)` | `a: ADDRESS; VAR var` | Read word at far ptr `a` into var (any segment) |
-| `SYSTEM.PUT(a, expr)` | `a: ADDRESS; expr` | Write expr to far ptr `a` (any segment) |
-| `SYSTEM.MOVE(s, d, n)` | `s, d: ADDRESS; n: INTEGER` | Copy n bytes from far ptr `s` to far ptr `d` (any segment) |
-| `SYSTEM.FILL(d, n, b)` | `d: ADDRESS; n: INTEGER; b: BYTE` | Fill n bytes at far ptr `d` with byte `b` (any segment) |
+**Statement intrinsic (compiler built-in):**
+
+| Intrinsic | Signature | Why compiler built-in |
+|-----------|-----------|----------------------|
+| `SYSTEM.GET(a, var)` | `a: ADDRESS; VAR var` | Store target is a typed designator; type determines store width |
 
 **Key codegen notes:**
-- `ADR(global)`: `LEA AX,[ofs]` (8D 06); `ADR(local)`: `LEA AX,[BP+ofs]`; `ADR(proc)`: `MOV AX,ofs` + CODE reloc
-- `SEG(global)`: `MOV AX,DS` (8C D8); local: `MOV AX,SS` (8C D0)
-- `GET`/`PUT`: `26 8B 07` / `26 89 07`
-- `MOVE`/`FILL`: `8C DA / 8E C2 / FC / F3 A4` (or `F3 AA`)
+- ADR/SEG/OFS/PTR: share the same typeless VAR push mechanism; INLINE patterns differ only in how they pop the two stack words
+- `GET`: `26 8B 07` (MOV AX, ES:[BX]) — compiler built-in, cannot be INLINE
 - **CLD always** before REP MOVSB/STOSB (direction flag may be set)
 - `LSL/LSR/ASR/ROR`: inline 8086 shifts, no function call.
   Shift-by-1: `D1` form. Shift-by-N (N≥2): `MOV CL,N` then CL form.
   Variable: `MOV CL,AL / AND CL,0Fh` then CL form.
 
-**SP_ constants (symbols.h):**
+**SP_ constants (symbols.h) — ADR, SEG, OFS, PUT, PTR, MOVE, FILL all removed (now INLINE in SYSTEM.mod):**
 ```c
-SP_ADR=12  SP_VAL=13  SP_GET=14  SP_PUT=15  SP_MOVE=16
-SP_PTR=17  SP_SEG=18  SP_OFS=19  SP_FILL=20
+SP_VAL=13  SP_GET=14
 SP_LSL=21  SP_ASR=22  SP_ROR=23  SP_LSR=24
 ```
 
@@ -1051,96 +1042,69 @@ If ProcName does not exists into module File.mod -> compiler must produce error 
 
 ---
 
-## Known bugs FIXED — do not reintroduce
+## INLINE procedures  ← CRITICAL stack-balance rule
 
-1. **`parse_type()` out-pointer must be initialised before call.**
-   `TypeDesc *t = type_integer;` before every `parse_type(&t)` call.
+```
+PROCEDURE name*(params): rettype; INLINE(byte, byte, ..., paramName, ...);
+```
 
-2. **Token vs type-form constants must never be mixed.**
-   T_ARRAY=50, TF_ARRAY=7; T_RECORD=73, TF_RECORD=8; T_POINTER=71, TF_POINTER=9.
+An INLINE procedure has **no body, no prologue, no epilogue, and no CALL instruction**.
+The byte pattern is emitted verbatim at every call site.
 
-3. **Token enum replaced with #defines** — no C sequential-value collisions.
+### How the byte pattern is emitted
 
-4. **Field access through VAR params:** `cg_les_bx_bp(param.adr)` then
-   `cg_add_bx_imm(field.offset)`. Do NOT add field.offset to param.adr directly.
+- **Integer literal**: emitted as a single raw byte (0..255). Must fit in one byte.
+- **Formal parameter name**: substituted by the 2-byte little-endian address of the actual argument:
+  - Local variable / stack parameter → signed 16-bit BP offset, no relocation.
+  - Global variable → unsigned 16-bit DS offset + DATA relocation record.
 
-5. **`cg_store_item` for VAR param (is_ref=1, M_LOCAL):** PUSH AX before LES,
-   POP AX before store — LES clobbers BX/ES.
+The substituted address is the **address** (location) of the variable, not its value.
+The byte pattern is responsible for the actual load/store using that address.
 
-6. **Pointer comparison only compared offset (AX), not segment (DX).** Fixed by
-   `cg_ptr_cmp_eq()` in `parse_expr` when LHS type is `TF_POINTER` or `TF_NILTYPE`.
-   `SYSTEM_Alloc` always returns AX=0 (heap blocks at offset 0 of their segment),
-   so AX-only comparison always matched NIL, causing every `p = NIL` test to be TRUE.
+### Stack balance rule — MANDATORY
 
-7. **NIL constant load did not zero DX.** In `cg_load_item` M_CONST, `is_ptr` checked
-   `TF_POINTER` only. NIL has `TF_NILTYPE`, so DX was not zeroed → stale DX corrupted
-   pointer equality. Fixed: also zero DX when `item->type->form == TF_NILTYPE`.
+**SP before the inline call equals SP after the inline call.**
 
-8. **SYSTEM_INIT heap probe assumed `INT 21h AH=48h BX=FFFFh` always fails.** On xt
-   emulator with abundant memory, the alloc succeeds; original code then zeroed BX and
-   called MEM_INIT with size=0, disabling the heap entirely. Fixed: on unexpected success
-   free the block (INT 21h AH=49h), then proceed with BX=FFFFh as intended.
+The compiler emits the byte pattern directly in-line with the surrounding code.
+There is no CALL/RET frame to hide stack imbalance.  Any PUSH inside the byte
+pattern that is not matched by a corresponding POP (or equivalent SP adjustment)
+corrupts the caller's stack frame and leads to undefined behavior at RET time.
 
-9. **`cg_load_item` M_LOCAL/M_GLOBAL with `is_ref=1` did not clear `is_ref` after deref.**
-   When a VAR param (is_ref=1) was used as an operand in a binary expression (e.g., `x + 1`),
-   `parse_simple_expr` called `cg_load_item` which emitted `LES BX,[BP+adr]; MOV AX,ES:[BX]`
-   and set `item->mode = M_REG` but left `is_ref = 1`. Then the outer `cg_load_item(&rhs)` in
-   `parse_statement` saw `M_REG, is_ref=1` and emitted a spurious `MOV AX,ES:[BX]`, overwriting
-   the computed result with the old value. Fixed: clear `item->is_ref = 0` in the M_LOCAL and
-   M_GLOBAL `is_ref` branches of `cg_load_item`.
+**Every INLINE procedure MUST leave SP unchanged.** This is a hard, unconditional
+rule enforced by programmer discipline — the compiler does not verify the byte
+sequence, but the rule MUST be followed for correctness.
 
-10. **NIL literal passed as pointer argument pushed only 1 word (offset), not 2.**
-    In `parse_actual_params`, the "push DX (segment)" step checked `TF_POINTER || TF_PROC`
-    but not `TF_NILTYPE` or `TF_ADDRESS`. A literal `NIL` (type=`TF_NILTYPE`) only pushed
-    AX (offset=0); the segment word was missing, corrupting the callee's stack frame.
-    For example, `ListPush(NIL, 42)` stored 42 in the wrong location, and subsequent pointer
-    dereferences returned garbage or 0. Fixed: also push DX when `arg.type->form == TF_NILTYPE`
-    or `TF_ADDRESS` in `parse_actual_params` (parser.c line ~496).
+Examples of correct balanced patterns:
+```
+INLINE(090H);               (* NOP — SP unchanged *)
+INLINE(050H, 058H);         (* PUSH AX; POP AX — balanced *)
+INLINE(0B8H, 02AH, 000H);  (* MOV AX, 42 — SP unchanged, result in AX *)
+```
 
-11. **`.def` format — all procedures now use extended `FAR/NEAR` format regardless of parameter count.**
-    Previously, procedures with no parameters were written in a legacy format:
-    `PROC fullname seg offset`. This format does not record the FAR/NEAR convention.
-    When read back, `def_read` created a `type_new_proc` with `is_far=0` (NEAR default),
-    causing all no-param imported procedures (e.g. `Out.Ln`, `Out.Open`) to be called via
-    NEAR `E8` instead of FAR `9A` — corrupting the return address on the stack.
-    Fixed: `def_write` now always emits `PROC name FAR/NEAR rettype\nEND\n`, even for
-    procedures with no parameters. The legacy reader path in `def_read` is preserved for
-    backward compatibility with hand-written `.def` files.
+Examples of INCORRECT unbalanced patterns (FORBIDDEN):
+```
+INLINE(050H);               (* PUSH AX only — SP decremented by 2, BROKEN *)
+INLINE(058H);               (* POP AX only  — SP incremented by 2, BROKEN *)
+```
 
-12. **Qualified import calls emitted NEAR instead of FAR.**
-    In `parse_designator`, when resolving `Alias.Name` for a `K_IMPORT` module alias,
-    `item->is_far` was never assigned — it remained 0 (the `parse_factor` initialiser).
-    All qualified proc calls therefore took the `cg_call_near(rdoff_id)` branch, emitting
-    `E8 rel16` (NEAR) instead of `9A oo oo ss ss` (FAR). The callee is in a different
-    code segment, so the NEAR return address is wrong, causing a runaway crash.
-    Fixed: after resolving the `.def` symbol, set `item->is_far = def_sym->type->is_far`.
-    If no `.def` entry exists, default `item->is_far = 1`.
+### Restrictions
 
-13. **Static link for nested procedure uplevel variable access — fully implemented.**
-    Inner procs accessing outer proc's local variables (uplevel access).
+- Cannot be combined with `FAR`, `NEAR`, or `EXTERNAL` modifiers.
+- Can be exported (`*`); exported inline procs have no RDOFF GLOBAL record.
+- Return value (if any) must be in AX (INTEGER/BOOLEAN/CHAR/BYTE/SET/POINTER) or
+  DX:AX (LONGINT/ADDRESS) — same convention as regular procedures.
 
-    **Mechanism:**
-    - `TypeDesc.has_sl=1`: marks a nested proc as needing a static link.
-    - Caller pushes outer BP as a hidden last argument before CALL (via `emit_push_static_link`).
-      This sits at `[BP+4]` in the callee (NEAR); params shift to `[BP+6]`.
-    - `Item.sl_hops` (set in `parse_designator`): number of SL chain hops to reach the
-      scope where the variable was declared.
-    - `cg_sl_load_bx(hops)`: traverses the SL chain; after the call BX = outer frame's BP.
-      `[BP+4]` = parent BP (1 hop); further hops follow `SS:[BX+4]`.
-    - `cg_sl_load_ax` / `cg_sl_store_ax`: 16-bit (INTEGER, BOOLEAN, CHAR, BYTE).
-    - `cg_sl_load_long_ax` / `cg_sl_store_long_ax`: 32-bit (LONGINT, POINTER, PROC var)
-      — loads/stores DX:AX via `SS:[BX+ofs]` + `SS:[BX+ofs+2]`.
-    - `cg_sl_fld_real_bx` / `cg_sl_fstp_real_bx`: REAL (4-byte) via `SS:[BX+ofs]`.
-    - `cg_sl_fld_longreal_bx` / `cg_sl_fstp_longreal_bx`: LONGREAL (8-byte).
-    - `cg_sl_addr_ax`: returns SS-relative address of uplevel var (for VAR param passing).
-    - `emit_push_static_link(def_level)`: callers at sibling or ancestor scopes traverse
-      the SL chain to find the correct outer BP to pass.
-    - All manually-constructed `Item` structs initialise `sl_hops=0`.
+### Cross-module export / import
 
-    **Verified by `TestNestedProcs.Mod`**: INTEGER, LONGINT, REAL, LONGREAL uplevel
-    load/store; 1-hop, 2-hop, 3-hop traversal; passing uplevel var as VAR param;
-    sibling nested procs; closure-like accumulators; uplevel params; recursive nested
-    procs; deep multi-level mutation.
+Exported inline procs are stored in the `.def` file as:
+```
+INLINE ModName_ProcName rettype
+  PARAM VAR name type
+  BYTES b0 b1 P0 b2 ...
+END
+```
+`def_read` fully reconstructs the `TypeDesc` (including byte pattern and param list).
+At import sites, bytes are emitted directly — no RDOFF IMPORT record is created.
 
 ---
 
@@ -1151,11 +1115,3 @@ If ProcName does not exists into module File.mod -> compiler must produce error 
 | Assignment: INTEGER→REAL coercion not implicit | Use `REAL(i)` / `LONGREAL(i)` at assignment |
 | Array bounds checking | Not implemented |
 | Import formal parameter type checking at call sites | Not enforced |
-
-**Notes on previously-listed limitations that are now implemented:**
-- Implicit INTEGER→REAL coercion in binary expressions: `parse_term`, `parse_simple_expr`, `parse_expr` in `pexpr.c` auto-emit `FILD word/dword` when one operand is REAL/LONGREAL and the other is an integer type. Handles both orderings (int LHS or int RHS) for all arithmetic and relational operators. Verified by section 49 in `test_src.sh`.
-- `FLOAT(x)` and `ENTIER(x)` synonyms: `FLOAT` registered as K_TYPE alias for `type_real`; `ENTIER` registered as K_SYSPROC with `SP_FLOOR`. Both in `sym_init()` in `symbols.c`. Verified by section 48 in `test_src.sh`.
-- SET type: literals `{e1, e2, ...}` and ranges `{lo..hi}`, operators `+` (union), `-` (difference), `*` (intersection), `/` (symmetric diff), and `IN` membership test. SET is 16-bit (bits 0–15). Codegen: accumulator-on-stack for literals; bitwise AND/OR/XOR/NOT for operators; `MOV BX,s; MOV CL,i; MOV AX,1; SHL AX,CL; TEST AX,BX` for IN. Scanner fix: `n..m` without spaces now correct via `SC.pending_sym`. Verified by section 50 in `test_src.sh`.
-- `ARRAY m, n OF T` multi-dimensional syntax: parsed and desugared to nested arrays in `parse_type` (parser.c). No dedicated executable test yet.
-- `NEW(p, n)` sized allocation: fully implemented — `n` is evaluated, optionally multiplied by element size, and passed to `SYSTEM_Alloc`. See `parse_sysproc_call SP_NEW` in parser.c.
-- PROC-type variable call-through: fully implemented and verified by `TestProcVar.Mod`.

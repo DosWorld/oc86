@@ -101,8 +101,8 @@ Use the `$L` system comment directive in the source file to pack an additional `
 the `.om` archive alongside the compiled module's own `.rdf` and `.def`:
 
 ```oberon
-(*$Lhelper.rdf*)       (* block-comment form *)
-//$Lhelper.rdf         (* line-comment form  *)
+(*$L helper.rdf*)       (* block-comment form *)
+//$L helper.rdf         (* line-comment form  *)
 ```
 
 The directive is processed during scanning and may appear anywhere in the source.  The file

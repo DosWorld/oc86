@@ -304,15 +304,8 @@ void sym_init(void) {
     /* SYSTEM compiler intrinsics — accessible only via SYSTEM.xxx qualified access.
        Pre-declared in universe so sym_find("ADR") etc. succeeds from the
        SYSTEM.xxx dot branch in parse_designator. */
-    predef_sysproc("ADR",  SP_ADR);
     predef_sysproc("VAL",  SP_VAL);
     predef_sysproc("GET",  SP_GET);
-    predef_sysproc("PUT",  SP_PUT);
-    predef_sysproc("MOVE", SP_MOVE);
-    predef_sysproc("PTR",  SP_PTR);
-    predef_sysproc("SEG",  SP_SEG);
-    predef_sysproc("OFS",  SP_OFS);
-    predef_sysproc("FILL", SP_FILL);
     predef_sysproc("LSL",  SP_LSL);
     predef_sysproc("LSR",  SP_LSR);
     predef_sysproc("ASR",  SP_ASR);

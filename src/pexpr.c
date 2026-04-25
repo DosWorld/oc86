@@ -172,6 +172,18 @@ void parse_designator(Item *item) {
                     continue;
                 }
 
+                /* Inline proc: return as M_PROC with is_inline set; no RDOFF import. */
+                if (def_sym && def_sym->kind == K_PROC && def_sym->type &&
+                    def_sym->type->is_inline) {
+                    item->mode    = M_PROC;
+                    item->type    = def_sym->type;
+                    item->is_far  = 0;
+                    item->rdoff_id = -1;
+                    item->adr     = 0;  /* no code address */
+                    item->val     = 0;  /* level (not nested) */
+                    continue;
+                }
+
                 /* find or add RDOFF import */
                 id = pe_get_system_import(full_name);
                 item->rdoff_id = id;
@@ -367,8 +379,8 @@ void parse_actual_params(TypeDesc *proc_type) {
                 }
                 cg_emit1(OP_PUSH_AX);   /* PUSH LEN */
             }
-            if (arg.typeless && arg.mode == M_LOCAL) {
-                /* Forwarding a typeless VAR param: slot at [BP+adr] already holds the
+            if ((arg.typeless || arg.is_ref) && arg.mode == M_LOCAL) {
+                /* Forwarding a typeless or VAR param: slot at [BP+adr] already holds the
                    far address {offset:2, segment:2}. Copy both words directly. */
                 cg_load_bp((int32_t)(arg.adr + 2));  /* AX = segment word */
                 cg_emit1(OP_PUSH_AX);                /* PUSH segment */
@@ -389,6 +401,18 @@ void parse_actual_params(TypeDesc *proc_type) {
                 /* global data → DS */
                 cg_emit1(OP_PUSH_DS);    /* PUSH DS  (data segment) */
                 cg_emit1(OP_PUSH_AX);    /* PUSH AX  (offset) */
+            } else if (arg.mode == M_REG && arg.is_ref) {
+                /* Pointer deref p^ or indexed array element: ES:BX = far address
+                   of the location.  Push ES (segment) then BX (offset). */
+                cg_emit1(OP_PUSH_ES);           /* PUSH ES */
+                cg_emit2(0x8B, 0xC3);           /* MOV AX, BX */
+                cg_emit1(OP_PUSH_AX);           /* PUSH AX (= BX = offset) */
+            } else if (arg.mode == M_PROC) {
+                /* Procedure name: far address is CS:code_offset.
+                   Push CS (segment) then code offset (with CODE reloc). */
+                cg_emit1(OP_PUSH_CS);                           /* PUSH CS */
+                cg_load_code_addr((uint16_t)(uint32_t)arg.adr); /* MOV AX, ofs + CODE reloc */
+                cg_emit1(OP_PUSH_AX);                           /* PUSH AX (offset) */
             } else {
                 cg_load_item(&arg);
                 /* fallback (e.g. already-loaded far ptr) — push DS */
@@ -841,6 +865,13 @@ static void parse_factor(Item *item) {
                     item->mode = M_FREG;
                 else
                     item->mode = M_REG;
+            } else if (item->mode==M_PROC && item->type && item->type->is_inline
+                    && pe_sc->sym==T_LPAREN) {
+                /* inline proc used as expression: emit byte pattern, result in AX */
+                TypeDesc *pt = item->type;
+                pe_emit_inline_call(pt);
+                item->type = pt->ret_type ? pt->ret_type : type_integer;
+                item->mode = M_REG;
             } else if ((item->mode==M_PROC || item->mode==M_IMPORT)
                     && pe_sc->sym==T_LPAREN) {
                 /* function call as expression */
@@ -1381,68 +1412,6 @@ static void parse_system_intrinsic(Item *item, int id) {
     pe_expect(T_LPAREN);
     switch (id) {
 
-    case SP_ADR:
-        /* SYSTEM.ADR(v) -> ADDRESS: offset of v within its segment.
-           Supports: global/local variables and arrays/records (M_GLOBAL/M_LOCAL),
-           VAR params (M_LOCAL + is_ref), procedure names (M_PROC),
-           array elements and pointer dereferences (M_REG + is_ref=1 → BX),
-           and uplevel variables (M_LOCAL, sl_hops>0 → SS-relative via SL chain). */
-        parse_designator(&arg);
-        if (arg.mode == M_PROC) {
-            /* Procedure: code-segment offset; DX = CS (segment of the procedure). */
-            cg_load_code_addr((uint16_t)(uint32_t)arg.adr);
-            cg_emit2(0x8C, 0xCA);             /* MOV DX, CS */
-        } else if (arg.mode == M_LOCAL && arg.is_ref) {
-            /* VAR param: far ptr {offset,segment} at [BP+adr].
-               Return the address the VAR param points to: AX=offset, DX=segment. */
-            cg_load_bp(arg.adr);              /* AX = [BP+adr]   = offset of caller's var */
-            cg_load_bp(arg.adr + 2);          /* AX = [BP+adr+2] = segment (clobbers AX) */
-            cg_emit2(0x89, 0xC2);             /* MOV DX, AX   — save segment in DX */
-            cg_load_bp(arg.adr);              /* AX = [BP+adr] = offset (reload) */
-        } else if (arg.mode == M_LOCAL && arg.sl_hops > 0) {
-            /* Uplevel variable: outer frame BP in BX via SL chain, then LEA */
-            cg_sl_load_bx(arg.sl_hops);
-            /* LEA AX, [BX+ofs] — SS-relative address of outer variable */
-            if (arg.adr >= -128 && arg.adr <= 127) {
-                cg_emit3(0x8D, 0x47, (uint8_t)(arg.adr & 0xFF));
-            } else {
-                cg_emit2(0x8D, 0x87); cg_emitw((uint16_t)(int16_t)arg.adr);
-            }
-            cg_emit2(0x8C, 0xD2);             /* MOV DX, SS — segment for stack locals */
-        } else if (arg.mode == M_LOCAL) {
-            cg_load_addr_bp(arg.adr);         /* LEA AX, [BP+adr] */
-            cg_emit2(0x8C, 0xD2);             /* MOV DX, SS — segment for stack locals */
-        } else if (arg.mode == M_GLOBAL) {
-            cg_load_addr_mem((uint16_t)(uint32_t)arg.adr); /* LEA AX, [data_ofs]+RELOC */
-            cg_emit2(0x8C, 0xDA);             /* MOV DX, DS — segment for data globals */
-        } else if (arg.mode == M_REG && arg.is_ref) {
-            /* Pointer deref (n^) or array element: ES:BX = far address.
-               Return full far pointer DX:AX = ES:BX so ADR(n^) = n. */
-            cg_emit2(0x8B, 0xC3);             /* MOV AX, BX */
-            cg_emit2(0x8C, 0xC2);             /* MOV DX, ES */
-        } else {
-            pe_error("ADR: variable or procedure required");
-            cg_load_imm(0);
-        }
-        item->type = type_address;
-        item->mode = M_REG;
-        break;
-
-    case SP_PTR:
-        /* SYSTEM.PTR(s, o) -> ADDRESS: construct far pointer from segment s and offset o.
-           s is pushed first (segment), o evaluated second (offset). */
-        parse_expr(&arg);
-        cg_load_item(&arg);                   /* AX = segment */
-        cg_emit1(OP_PUSH_AX);                 /* save segment */
-        pe_expect(T_COMMA);
-        parse_expr(&arg);
-        cg_load_item(&arg);                   /* AX = offset */
-        cg_emit1(OP_POP_DX);                  /* DX = segment */
-        /* result: DX:AX = far pointer */
-        item->type = type_address;
-        item->mode = M_REG;
-        break;
-
     case SP_VAL: {
         /* SYSTEM.VAL(Type, expr) -> Type: reinterpret bits (no code generated).
            Sizes must match. */
@@ -1458,52 +1427,6 @@ static void parse_system_intrinsic(Item *item, int id) {
         item->mode = M_REG;
         break;
     }
-
-    case SP_SEG:
-        /* SYSTEM.SEG(v) -> INTEGER: segment word of variable v.
-           Large model: locals live in SS (stack segment), globals in DS (data segment).
-           For VAR params (is_ref=1): return segment stored in the far ptr slot.
-           For pointer deref (n^): ES:BX is the pointer value; return ES. */
-        parse_designator(&arg);
-        if (arg.mode == M_REG && arg.is_ref) {
-            /* Pointer deref (n^): ES:BX = pointer value; SEG(n^) = segment of n */
-            cg_emit2(0x8C, 0xC0);             /* MOV AX, ES */
-        } else if (arg.mode == M_LOCAL && arg.is_ref) {
-            /* load segment word from VAR param's far ptr at [BP+adr+2] */
-            cg_load_bp(arg.adr + 2);          /* AX = segment */
-        } else if (arg.mode == M_LOCAL) {
-            cg_emit2(0x8C, 0xD0);             /* MOV AX, SS  (stack locals) */
-        } else if (arg.mode == M_GLOBAL) {
-            cg_emit2(0x8C, 0xD8);             /* MOV AX, DS  (data segment globals) */
-        } else {
-            pe_error("SEG: variable required");
-            cg_load_imm(0);
-        }
-        item->type = type_integer;
-        item->mode = M_REG;
-        break;
-
-    case SP_OFS:
-        /* SYSTEM.OFS(v) -> INTEGER: offset of variable v within its segment.
-           For pointer deref (n^): ES:BX is the pointer value; return BX. */
-        parse_designator(&arg);
-        if (arg.mode == M_REG && arg.is_ref) {
-            /* Pointer deref (n^): ES:BX = pointer value; OFS(n^) = offset of n */
-            cg_emit2(0x8B, 0xC3);             /* MOV AX, BX */
-        } else if (arg.mode == M_LOCAL && arg.is_ref) {
-            /* load offset word from VAR param's far ptr at [BP+adr] */
-            cg_load_bp(arg.adr);              /* AX = offset */
-        } else if (arg.mode == M_LOCAL) {
-            cg_load_addr_bp(arg.adr);         /* LEA AX, [BP+adr] */
-        } else if (arg.mode == M_GLOBAL) {
-            cg_load_addr_mem(arg.adr);        /* LEA AX, [data_ofs]+RELOC */
-        } else {
-            pe_error("OFS: variable required");
-            cg_load_imm(0);
-        }
-        item->type = type_integer;
-        item->mode = M_REG;
-        break;
 
     case SP_LSL:
     case SP_LSR:

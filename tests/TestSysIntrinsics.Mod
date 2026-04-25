@@ -8,10 +8,9 @@ MODULE TestSysIntrinsics;
    - SYSTEM.SEG(global)=DS, SYSTEM.SEG(local)=SS.
    - SYSTEM.OFS(global) = DS-relative offset (from LEA/RELOC).
    - SYSTEM.OFS(local)  = SS-relative offset (from LEA BP+ofs).
-   - SYSTEM.MOVE/FILL take raw AX offsets and use DS:SI / ES:DI (ES=DS set inline),
-     so they only work correctly with DS-relative (global) addresses.
-   - SYSTEM.GET/PUT also set ES=DS and use the AX word as a DS-relative offset;
-     they work with globals via OFS.  *)
+   - SYSTEM.MOVE(VAR src, dst; n): copies n bytes from src to dst (any segment).
+   - SYSTEM.FILL(VAR dst; n, b): fills n bytes at dst with byte b (any segment).
+   - SYSTEM.GET/PUT accept full ADDRESS (far pointer, any segment).  *)
 
 IMPORT Out;
 
@@ -213,27 +212,17 @@ BEGIN
 END TestOfsDeref;
 
 (* ================================================================
-   SYSTEM.MOVE  (global src/dst only — MOVE uses DS:SI/ES:DI = DS)
+   SYSTEM.MOVE  — MOVE(VAR src, dst; n): copies n bytes from src to dst
    ================================================================ *)
-
-(* Helper: load address of a global using OFS (DS-relative) *)
 
 (* ------------------------------------------------------------------ *)
 (* MOVE globals: copy gSrc array to gDst                              *)
 (* ------------------------------------------------------------------ *)
 PROCEDURE TestMoveGlobal;
-VAR i: INTEGER;
-    sa, da: INTEGER;
-    aS, aD: SYSTEM.ADDRESS;
 BEGIN
     gSrc[0] := 11; gSrc[1] := 22; gSrc[2] := 33; gSrc[3] := 44;
     gDst[0] :=  0; gDst[1] :=  0; gDst[2] :=  0; gDst[3] :=  0;
-    sa := SYSTEM.OFS(gSrc[0]);
-    da := SYSTEM.OFS(gDst[0]);
-    (* MOVE takes raw DS-relative offsets; internally does DS:SI -> ES:DI with ES=DS *)
-    aS := SYSTEM.PTR(SYSTEM.SEG(gSrc[0]), sa);
-    aD := SYSTEM.PTR(SYSTEM.SEG(gDst[0]), da);
-    SYSTEM.MOVE(aS, aD, 8);
+    SYSTEM.MOVE(gSrc, gDst, 8);
     Check("MOVE global[0]", gDst[0] = 11);
     Check("MOVE global[1]", gDst[1] = 22);
     Check("MOVE global[2]", gDst[2] = 33);
@@ -241,28 +230,19 @@ BEGIN
 END TestMoveGlobal;
 
 (* ------------------------------------------------------------------ *)
-(* MOVE via VAR param dst: callee receives far ptr to gDst;           *)
-(* we use SEG/OFS of the VAR param to get the address for MOVE.      *)
+(* MOVE via VAR param dst: MOVE directly into the VAR param           *)
 (* ------------------------------------------------------------------ *)
 PROCEDURE MoveIntoVarParam(VAR dst: ARRAY 4 OF INTEGER;
-                            sa: SYSTEM.ADDRESS; n: INTEGER);
-VAR ds, dofs: INTEGER;
-    da: SYSTEM.ADDRESS;
+                            VAR src: ARRAY 4 OF INTEGER; n: INTEGER);
 BEGIN
-    ds   := SYSTEM.SEG(dst[0]);
-    dofs := SYSTEM.OFS(dst[0]);
-    da   := SYSTEM.PTR(ds, dofs);
-    SYSTEM.MOVE(sa, da, n)
+    SYSTEM.MOVE(src, dst, n)
 END MoveIntoVarParam;
 
 PROCEDURE TestMoveVarParam;
-VAR sa: SYSTEM.ADDRESS;
-    i: INTEGER;
 BEGIN
     gSrc[0] := 5; gSrc[1] := 6; gSrc[2] := 7; gSrc[3] := 8;
     gDst[0] := 0; gDst[1] := 0; gDst[2] := 0; gDst[3] := 0;
-    sa := SYSTEM.PTR(SYSTEM.SEG(gSrc[0]), SYSTEM.OFS(gSrc[0]));
-    MoveIntoVarParam(gDst, sa, 8);
+    MoveIntoVarParam(gDst, gSrc, 8);
     Check("MOVE VAR param dst[0]", gDst[0] = 5);
     Check("MOVE VAR param dst[1]", gDst[1] = 6);
     Check("MOVE VAR param dst[2]", gDst[2] = 7);
@@ -270,7 +250,7 @@ BEGIN
 END TestMoveVarParam;
 
 (* ================================================================
-   SYSTEM.FILL  (global dst only — FILL uses ES:DI with ES=DS)
+   SYSTEM.FILL  — FILL(VAR dst; n: INTEGER; b: BYTE)
    ================================================================ *)
 
 (* ------------------------------------------------------------------ *)
@@ -278,15 +258,10 @@ END TestMoveVarParam;
 (* ------------------------------------------------------------------ *)
 PROCEDURE TestFillGlobal;
 VAR i: INTEGER;
-    seg, ofs: INTEGER;
-    da: SYSTEM.ADDRESS;
     ok: BOOLEAN;
 BEGIN
     FOR i := 0 TO 5 DO gFill[i] := i + 1 END;
-    seg := SYSTEM.SEG(gFill[0]);
-    ofs := SYSTEM.OFS(gFill[0]);
-    da  := SYSTEM.PTR(seg, ofs);
-    SYSTEM.FILL(da, 12, 0);         (* 6 x 2-byte INTEGERs = 12 bytes *)
+    SYSTEM.FILL(gFill, 12, 0);         (* 6 x 2-byte INTEGERs = 12 bytes *)
     ok := TRUE;
     FOR i := 0 TO 5 DO IF gFill[i] # 0 THEN ok := FALSE END END;
     Check("FILL global zeros 6 INTEGERs", ok)
@@ -297,29 +272,18 @@ END TestFillGlobal;
 (* (0ABh in both bytes of a word = 0ABABh)                           *)
 (* ------------------------------------------------------------------ *)
 PROCEDURE TestFillGlobalByte;
-VAR seg, ofs: INTEGER;
-    da: SYSTEM.ADDRESS;
 BEGIN
     gFill[0] := 0;
-    seg := SYSTEM.SEG(gFill[0]);
-    ofs := SYSTEM.OFS(gFill[0]);
-    da  := SYSTEM.PTR(seg, ofs);
-    SYSTEM.FILL(da, 2, 0ABH);       (* fill 2 bytes of gFill[0] with 0ABh *)
+    SYSTEM.FILL(gFill, 2, 0ABH);       (* fill 2 bytes of gFill[0] with 0ABh *)
     Check("FILL global non-zero byte", gFill[0] = 0ABABH)
 END TestFillGlobalByte;
 
 (* ------------------------------------------------------------------ *)
-(* FILL via VAR param: callee receives far ptr; uses SEG/OFS to get  *)
-(* the DS-relative address for FILL.                                  *)
+(* FILL via VAR param: fill the VAR param array directly              *)
 (* ------------------------------------------------------------------ *)
 PROCEDURE FillVarParam(VAR arr: ARRAY 6 OF INTEGER; n, b: INTEGER);
-VAR seg, ofs: INTEGER;
-    da: SYSTEM.ADDRESS;
 BEGIN
-    seg := SYSTEM.SEG(arr[0]);
-    ofs := SYSTEM.OFS(arr[0]);
-    da  := SYSTEM.PTR(seg, ofs);
-    SYSTEM.FILL(da, n, b)
+    SYSTEM.FILL(arr, n, b)
 END FillVarParam;
 
 PROCEDURE TestFillVarParam;

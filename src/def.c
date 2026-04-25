@@ -15,6 +15,7 @@ static void write_type(FILE *f, TypeDesc *t) {
     case TF_CHAR:     fprintf(f, "CHAR");    return;
     case TF_BYTE:     fprintf(f, "BYTE");    return;
     case TF_LONGINT:  fprintf(f, "LONGINT"); return;
+    case TF_ADDRESS:  fprintf(f, "ADDRESS"); return;
     case TF_ARRAY:    fprintf(f, "ARRAY");   return;
     case TF_POINTER:  fprintf(f, "POINTER VOID"); return;
     case TF_NOTYPE:   fprintf(f, "VOID");    return;
@@ -71,22 +72,53 @@ void def_write(FILE *f, const char *mod_name) {
         }
         case K_PROC: {
             TypeDesc *pt = sym->type;
-            fprintf(f, "PROC %s_%s %s ", mod_name, sym->name,
-                    (pt && pt->is_far) ? "FAR" : "NEAR");
-            write_type(f, pt ? pt->ret_type : NULL);
-            fprintf(f, "\n");
-            if (pt && pt->n_params > 0) {
-                Symbol *p;
-                for (p = pt->params; p; p = p->next) {
-                    if (p->kind == K_VARPARAM)
-                        fprintf(f, "  PARAM VAR %s ", p->name);
-                    else
-                        fprintf(f, "  PARAM %s ", p->name);
-                    write_type(f, p->type);
-                    fprintf(f, "\n");
+            if (pt && pt->is_inline) {
+                /* INLINE proc: emit INLINE keyword + byte pattern */
+                int j;
+                fprintf(f, "INLINE %s_%s ", mod_name, sym->name);
+                write_type(f, pt ? pt->ret_type : NULL);
+                fprintf(f, "\n");
+                if (pt->n_params > 0) {
+                    Symbol *p;
+                    for (p = pt->params; p; p = p->next) {
+                        if (p->kind == K_VARPARAM)
+                            fprintf(f, "  PARAM VAR %s ", p->name);
+                        else
+                            fprintf(f, "  PARAM %s ", p->name);
+                        write_type(f, p->type);
+                        fprintf(f, "\n");
+                    }
                 }
+                /* emit the byte pattern as space-separated entries:
+                   raw byte: decimal value; param ref: P<index> */
+                fprintf(f, "  BYTES");
+                for (j = 0; j < pt->n_inline; j++) {
+                    InlineEntry *e = &pt->inline_data[j];
+                    if (e->is_param)
+                        fprintf(f, " P%d", e->param_idx);
+                    else
+                        fprintf(f, " %d", (int)e->raw_byte);
+                }
+                fprintf(f, "\n");
+                fprintf(f, "END\n");
+            } else {
+                fprintf(f, "PROC %s_%s %s ", mod_name, sym->name,
+                        (pt && pt->is_far) ? "FAR" : "NEAR");
+                write_type(f, pt ? pt->ret_type : NULL);
+                fprintf(f, "\n");
+                if (pt && pt->n_params > 0) {
+                    Symbol *p;
+                    for (p = pt->params; p; p = p->next) {
+                        if (p->kind == K_VARPARAM)
+                            fprintf(f, "  PARAM VAR %s ", p->name);
+                        else
+                            fprintf(f, "  PARAM %s ", p->name);
+                        write_type(f, p->type);
+                        fprintf(f, "\n");
+                    }
+                }
+                fprintf(f, "END\n");
             }
-            fprintf(f, "END\n");
             break;
         }
         default:
@@ -129,6 +161,7 @@ static TypeDesc *resolve_type_name(const char *tname) {
     if (strcmp(tname, "CHAR")    == 0) return type_char;
     if (strcmp(tname, "BYTE")    == 0) return type_byte;
     if (strcmp(tname, "LONGINT") == 0) return type_longint;
+    if (strcmp(tname, "ADDRESS") == 0) return type_address;
     if (strcmp(tname, "VOID")    == 0) return type_notype;
     if (strcmp(tname, "ARRAY")   == 0) return type_new_array(type_char, -1); /* open ARRAY OF CHAR */
     /* Search current scope for a K_TYPE symbol */
@@ -174,6 +207,8 @@ int def_read(FILE *f, const char *alias) {
     int32_t cur_rec_total_size = 0; /* declared total size from .def (authoritative) */
     /* current PROC type being built (for PARAM lines) */
     TypeDesc *cur_proc = NULL;
+    /* current INLINE proc type being built (for PARAM and BYTES lines) */
+    TypeDesc *cur_inline = NULL;
 
     while (fgets(line, sizeof(line), f)) {
         char *p;
@@ -217,7 +252,7 @@ int def_read(FILE *f, const char *alias) {
         keyword[kn] = '\0';
         q = trim_lead(q);   /* q now points past keyword */
 
-        /* ── END: close current RECORD or PROC block ── */
+        /* ── END: close current RECORD, PROC, or INLINE block ── */
         if (strcmp(keyword, "END") == 0) {
             if (cur_rec) {
                 /* Restore authoritative total size declared in .def header.
@@ -225,10 +260,54 @@ int def_read(FILE *f, const char *alias) {
                    explicit field offsets and a precise total size — use it. */
                 cur_rec->size = cur_rec_total_size;
                 cur_rec = NULL;
+            } else if (cur_inline) {
+                type_calc_arg_size(cur_inline);
+                cur_inline = NULL;
             } else if (cur_proc) {
                 type_calc_arg_size(cur_proc);
                 cur_proc = NULL;
             }
+            continue;
+        }
+
+        /* ── BYTES: inline byte pattern for current INLINE proc ── */
+        if (strcmp(keyword, "BYTES") == 0 && cur_inline) {
+            /* parse space-separated entries: decimal integer or P<n> for param ref */
+            char *bp = q;
+            InlineEntry *ibuf = NULL;
+            int ibuf_cap = 0, ibuf_len = 0;
+            while (*bp) {
+                InlineEntry ent;
+                while (*bp == ' ' || *bp == '\t') bp++;
+                if (*bp == '\0') break;
+                if (*bp == 'P' || *bp == 'p') {
+                    /* param reference P<idx> */
+                    int idx = 0;
+                    bp++;
+                    while (*bp >= '0' && *bp <= '9') { idx = idx * 10 + (*bp - '0'); bp++; }
+                    ent.is_param = 1;
+                    ent.raw_byte = 0;
+                    ent.param_idx = idx;
+                } else {
+                    /* raw byte decimal */
+                    long bv = 0;
+                    while (*bp >= '0' && *bp <= '9') { bv = bv * 10 + (*bp - '0'); bp++; }
+                    ent.is_param = 0;
+                    ent.raw_byte = (uint8_t)(bv & 0xFF);
+                    ent.param_idx = 0;
+                }
+                /* grow buffer if needed */
+                if (ibuf_len >= ibuf_cap) {
+                    int new_cap = ibuf_cap ? ibuf_cap * 2 : 16;
+                    InlineEntry *nb = (InlineEntry *)malloc((size_t)new_cap * sizeof(InlineEntry));
+                    if (!nb) break;
+                    if (ibuf) { memcpy(nb, ibuf, (size_t)ibuf_len * sizeof(InlineEntry)); free(ibuf); }
+                    ibuf = nb; ibuf_cap = new_cap;
+                }
+                ibuf[ibuf_len++] = ent;
+            }
+            cur_inline->inline_data = ibuf;
+            cur_inline->n_inline    = ibuf_len;
             continue;
         }
 
@@ -247,8 +326,9 @@ int def_read(FILE *f, const char *alias) {
             continue;
         }
 
-        /* ── PARAM: add parameter to current PROC ── */
-        if (strcmp(keyword, "PARAM") == 0 && cur_proc) {
+        /* ── PARAM: add parameter to current PROC or INLINE block ── */
+        if (strcmp(keyword, "PARAM") == 0 && (cur_proc || cur_inline)) {
+            TypeDesc *target = cur_proc ? cur_proc : cur_inline;
             /* PARAM [VAR] <name> <type...> */
             is_var2 = 0;
             kw2[0] = '\0';
@@ -264,7 +344,7 @@ int def_read(FILE *f, const char *alias) {
             while (*q && *q != ' ' && *q != '\t') q++;
             q = trim_lead(q);
             ptype = parse_def_type(&q);
-            type_add_param(cur_proc, pname, ptype, is_var2);
+            type_add_param(target, pname, ptype, is_var2);
             continue;
         }
 
@@ -345,6 +425,21 @@ int def_read(FILE *f, const char *alias) {
                 strncpy(s->mod_name, alias, NAME_LEN-1);
             }
 
+        /* ── INLINE proc (INLINE fullname rettype … PARAM … BYTES … END) ── */
+        } else if (strcmp(keyword, "INLINE") == 0) {
+            /* parse return type */
+            ret = parse_def_type(&q);
+            pt  = type_new_proc(ret);
+            pt->is_inline = 1;
+            pt->is_far    = 0;  /* inline has no calling convention */
+            s   = sym_new(qname, K_PROC);
+            s->code_ofs   = 0;
+            s->rdoff_id   = -1;
+            s->type       = pt;
+            s->exported   = 1;
+            strncpy(s->mod_name, fullname, NAME_LEN-1);
+            cur_inline = pt;
+
         /* ── PROC (extended: PROC fullname FAR rettype … END) ── */
         } else if (strcmp(keyword, "PROC") == 0) {
             /* q: "FAR <rettype>"  or legacy "seg offset" */
@@ -381,8 +476,9 @@ int def_read(FILE *f, const char *alias) {
         } /* end qname block */
     }
 
-    /* Close any unclosed PROC block (missing END) */
-    if (cur_proc) type_calc_arg_size(cur_proc);
+    /* Close any unclosed PROC or INLINE block (missing END) */
+    if (cur_proc)   type_calc_arg_size(cur_proc);
+    if (cur_inline) type_calc_arg_size(cur_inline);
 
     return 0;
 }

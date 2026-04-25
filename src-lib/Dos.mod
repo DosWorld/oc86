@@ -148,6 +148,65 @@ BEGIN
     p[dst] := 0X
 END ARG;
 
+PROCEDURE Up(c: CHAR): CHAR; NEAR;
+BEGIN
+    IF (c >= 'a') & (c <= 'z') THEN
+        c := CHR(ORD(c) - 32)
+    END;
+    RETURN c
+END Up;
+
+PROCEDURE GetEnv*(envvar: ARRAY OF CHAR; VAR dst: ARRAY OF CHAR);
+VAR
+    envseg : INTEGER;
+    ofs    : INTEGER;
+    ei     : INTEGER;
+    di     : INTEGER;
+    ch     : CHAR;
+    match  : BOOLEAN;
+BEGIN
+    dst[0] := 0X;
+    (* PSP offset 2Ch holds the environment segment (word, lo then hi byte) *)
+    envseg := ORD(ReadByte(GetPsp(), 2CH)) + ORD(ReadByte(GetPsp(), 2DH)) * 256;
+    IF envseg = 0 THEN RETURN END;
+
+    ofs := 0;
+    WHILE ReadByte(envseg, ofs) # 0X DO
+        (* compare env var name with envvar (case-insensitive) *)
+        ei := 0;
+        match := TRUE;
+        ch := ReadByte(envseg, ofs);
+        WHILE (ch # '=') & (ch # 0X) DO
+            IF (ei < LEN(envvar) - 1) & match THEN
+                match := Up(ch) = Up(envvar[ei]);
+                INC(ei)
+            ELSE
+                match := FALSE
+            END;
+            INC(ofs);
+            ch := ReadByte(envseg, ofs)
+        END;
+        (* match only if name lengths also equal *)
+        IF match & (envvar[ei] = 0X) & (ch = '=') THEN
+            INC(ofs); (* skip '=' *)
+            di := 0;
+            ch := ReadByte(envseg, ofs);
+            WHILE ch # 0X DO
+                IF di < LEN(dst) - 1 THEN
+                    dst[di] := ch; INC(di)
+                END;
+                INC(ofs);
+                ch := ReadByte(envseg, ofs)
+            END;
+            dst[di] := 0X;
+            RETURN
+        END;
+        (* skip to next entry: find end of current entry *)
+        WHILE ReadByte(envseg, ofs) # 0X DO INC(ofs) END;
+        INC(ofs) (* skip the NUL terminator *)
+    END
+END GetEnv;
+
 BEGIN
     ArgInit;
 END Dos.

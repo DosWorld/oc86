@@ -605,65 +605,80 @@ void parse_sysproc_call(int id) {
         cg_store_item(&var_it);
         break;
     }
-    case SP_PUT: {
-        /* SYSTEM.PUT(dst: ADDRESS; expr): store one word (expr) to far pointer dst.
-           dst is any ADDRESS expression (seg:ofs); works with heap, stack, data segment. */
-        Item addr_it, val_it;
-        parse_expr(&addr_it); cg_load_item(&addr_it); /* DX:AX = far ptr */
-        cg_emit1(OP_PUSH_DX);        /* save segment */
-        cg_emit1(OP_PUSH_AX);        /* save offset */
-        expect(T_COMMA);
-        parse_expr(&val_it); cg_load_item(&val_it);   /* AX = value */
-        cg_emit1(OP_POP_BX);         /* BX = offset */
-        cg_emit1(0x07);              /* POP ES  (segment) */
-        cg_emit3(OP_ES_PFX, 0x89, 0x07); /* MOV ES:[BX], AX */
-        break;
-    }
-    case SP_MOVE: {
-        /* SYSTEM.MOVE(src: ADDRESS; dst: ADDRESS; n: INTEGER): REP MOVSB.
-           src and dst are full ADDRESS values (any segment: heap, stack, data).
-           Sequence: SI=src_ofs, push src_seg; DI=dst_ofs, ES=dst_seg; CX=cnt;
-           pop src_seg into AX; PUSH DS (save); MOV DS,AX; REP MOVSB; POP DS (restore). */
-        Item src_it, dst_it, cnt_it;
-        parse_expr(&src_it); cg_load_item(&src_it);  /* DX:AX = src far ptr */
-        cg_emit2(0x8B, 0xF0);        /* MOV SI, AX  (src offset) */
-        cg_emit1(OP_PUSH_DX);        /* push src segment (saved for DS load after cnt) */
-        expect(T_COMMA);
-        parse_expr(&dst_it); cg_load_item(&dst_it);  /* DX:AX = dst far ptr */
-        cg_emit2(0x8B, 0xF8);        /* MOV DI, AX  (dst offset) */
-        cg_emit2(0x8E, 0xC2);        /* MOV ES, DX  (ES = dst segment) */
-        expect(T_COMMA);
-        parse_expr(&cnt_it); cg_load_item(&cnt_it);  /* AX = count */
-        cg_emit2(0x8B, 0xC8);        /* MOV CX, AX */
-        cg_emit1(0x58);              /* POP AX  (AX = src segment) */
-        cg_emit1(0x1E);              /* PUSH DS  (save original data segment) */
-        cg_emit2(0x8E, 0xD8);        /* MOV DS, AX  (DS = src segment) */
-        cg_emit1(OP_CLD);            /* CLD */
-        cg_emit2(0xF3, 0xA4);        /* REP MOVSB */
-        cg_emit1(0x1F);              /* POP DS  (restore original data segment) */
-        break;
-    }
-    case SP_FILL: {
-        /* SYSTEM.FILL(dst: ADDRESS; n: INTEGER; b: BYTE): REP STOSB.
-           dst is any ADDRESS expression (any segment: heap, stack, data). */
-        Item dst_it, cnt_it, val_it;
-        parse_expr(&dst_it); cg_load_item(&dst_it);  /* DX:AX = dst far ptr */
-        cg_emit2(0x8B, 0xF8);        /* MOV DI, AX  (dst offset) */
-        cg_emit2(0x8E, 0xC2);        /* MOV ES, DX  (ES = dst segment) */
-        expect(T_COMMA);
-        parse_expr(&cnt_it); cg_load_item(&cnt_it);  /* AX = count */
-        cg_emit2(0x8B, 0xC8);        /* MOV CX, AX */
-        expect(T_COMMA);
-        parse_expr(&val_it); cg_load_item(&val_it);  /* AX = fill byte */
-        cg_emit1(OP_CLD);            /* CLD */
-        cg_emit2(0xF3, 0xAA);        /* REP STOSB */
-        break;
-    }
     default:
         error("unsupported built-in statement");
         break;
     }
     expect(T_RPAREN);
+}
+
+/* Emit an inline procedure call.
+   Two modes, selected by whether the byte pattern references any formal parameter:
+
+   ADDRESS mode (pattern has param-name entries):
+     Collect actual argument addresses without pushing; each param-name entry in the
+     pattern emits a 2-byte little-endian address (BP offset for locals, DS offset
+     for globals with DATA reloc).  No PUSH/CALL/RET — raw bytes only.
+     Used for: INLINE(opcode, opcode, paramName) style (e.g. LoadWord).
+
+   VALUE mode (pattern has no param-name entries, all entries are raw bytes):
+     Push actual argument values via parse_actual_params (same as a normal call),
+     then emit the raw byte pattern.  The pattern uses POP instructions to consume
+     the pushed arguments and MUST restore SP to its value before the pushes.
+     Used for: INLINE with POP-based patterns (e.g. SYSTEM.MOVE, SYSTEM.FILL). */
+void pe_emit_inline_call(TypeDesc *pt) {
+    int i;
+    int has_param_ref = 0;
+    for (i = 0; i < pt->n_inline; i++)
+        if (pt->inline_data[i].is_param) { has_param_ref = 1; break; }
+
+    if (has_param_ref) {
+        /* ADDRESS mode: collect actual addresses, no pushing. */
+        int32_t arg_adr[32];
+        int     arg_is_global[32];
+        int     n_args = 0;
+        Symbol *formal;
+
+        expect(T_LPAREN);
+        formal = pt->params;
+        while (sc->sym != T_RPAREN && sc->sym != T_EOF) {
+            Item arg;
+            parse_designator(&arg);
+            if (n_args < 32) {
+                arg_adr[n_args]       = arg.adr;
+                arg_is_global[n_args] = (arg.mode == M_GLOBAL) ? 1 : 0;
+                n_args++;
+            }
+            (void)formal;
+            if (formal) formal = formal->next;
+            if (sc->sym == T_COMMA) scanner_next(sc);
+        }
+        expect(T_RPAREN);
+
+        for (i = 0; i < pt->n_inline; i++) {
+            InlineEntry *e = &pt->inline_data[i];
+            if (!e->is_param) {
+                cg_emit1(e->raw_byte);
+            } else {
+                int idx     = e->param_idx;
+                int32_t adr = (idx < n_args) ? arg_adr[idx] : 0;
+                int global  = (idx < n_args) ? arg_is_global[idx] : 0;
+                if (global) {
+                    rdf_add_reloc(&cg_obj, SEG_CODE, (uint32_t)cg_pc(), 2, SEG_DATA, 0);
+                    cg_emitw((uint16_t)(adr & 0xFFFF));
+                } else {
+                    cg_emitw((uint16_t)(int16_t)adr);
+                }
+            }
+        }
+    } else {
+        /* VALUE mode: push actual argument values, then emit raw byte pattern.
+           The pattern MUST consume exactly what was pushed (SP-balance rule). */
+        if (pt->n_params > 0 || sc->sym == T_LPAREN)
+            parse_actual_params(pt);
+        for (i = 0; i < pt->n_inline; i++)
+            cg_emit1(pt->inline_data[i].raw_byte);
+    }
 }
 
 void parse_statement(TypeDesc *ret_type) {
@@ -783,6 +798,10 @@ void parse_statement(TypeDesc *ret_type) {
                     else                      cg_call_proc_var_near_mem((uint16_t)item.adr);
                 }
             }
+        } else if (item.mode==M_PROC && item.type && item.type->is_inline) {
+            /* inline procedure: emit byte pattern with actual arg address substitution */
+            if (sc->sym==T_LPAREN || item.type->n_params > 0)
+                pe_emit_inline_call(item.type);
         } else if (item.mode==M_PROC || item.mode==M_IMPORT) {
             if (sc->sym==T_LPAREN || (item.type && item.type->n_params>0)) {
                 parse_actual_params(item.type ? item.type : type_new_proc(type_notype));
@@ -1198,6 +1217,66 @@ void parse_proc_decl(void) {
         snprintf(gname, sizeof(gname), "%s_%s", cur_mod, name);
         sym->rdoff_id = rdf_add_import(&cg_obj, gname);
         sym->code_ofs = 0;
+        sym_close_scope();
+        return;
+    }
+
+    /* INLINE modifier: no body, no CALL; byte pattern emitted at each use site.
+       Syntax: INLINE(entry {, entry})
+       entry = hex-literal | formal-param-name
+       hex-literal → raw byte; formal-param-name → 2-byte signed offset placeholder. */
+    if (sc->sym == T_IDENT && strcmp(sc->id, "INLINE") == 0) {
+        /* Collect inline entries into a dynamically-grown array. */
+        InlineEntry *ibuf = NULL;
+        int ibuf_cap = 0, ibuf_len = 0;
+        scanner_next(sc);
+        expect(T_LPAREN);
+        while (sc->sym != T_RPAREN && sc->sym != T_EOF) {
+            InlineEntry ent;
+            if (sc->sym == T_INT) {
+                /* raw byte literal */
+                ent.is_param = 0;
+                ent.raw_byte = (uint8_t)(sc->ival & 0xFF);
+                ent.param_idx = 0;
+                scanner_next(sc);
+            } else if (sc->sym == T_IDENT) {
+                /* formal parameter name: look up its 0-based index */
+                int idx = 0;
+                Symbol *fp;
+                int found = 0;
+                for (fp = pt->params; fp; fp = fp->next) {
+                    if (strcmp(fp->name, sc->id) == 0) { found = 1; break; }
+                    idx++;
+                }
+                if (!found) { error("unknown parameter name in INLINE"); idx = 0; }
+                ent.is_param = 1;
+                ent.raw_byte = 0;
+                ent.param_idx = idx;
+                scanner_next(sc);
+            } else {
+                error("byte literal or parameter name expected in INLINE");
+                break;
+            }
+            /* grow buffer if needed */
+            if (ibuf_len >= ibuf_cap) {
+                int new_cap = ibuf_cap ? ibuf_cap * 2 : 16;
+                InlineEntry *nb = (InlineEntry *)malloc((size_t)new_cap * sizeof(InlineEntry));
+                if (!nb) { error("out of memory"); break; }
+                if (ibuf) { memcpy(nb, ibuf, (size_t)ibuf_len * sizeof(InlineEntry)); free(ibuf); }
+                ibuf = nb; ibuf_cap = new_cap;
+            }
+            ibuf[ibuf_len++] = ent;
+            if (sc->sym == T_COMMA) scanner_next(sc);
+        }
+        expect(T_RPAREN);
+        expect(T_SEMI);
+        pt->is_inline   = 1;
+        pt->inline_data = ibuf;
+        pt->n_inline    = ibuf_len;
+        /* arg_size is not used for inline (no CALL), but calc it for correctness */
+        type_calc_arg_size(pt);
+        /* inline procs have no code body — no RDOFF GLOBAL record needed;
+           the byte pattern is exported via the .def file (INLINE/BYTES lines). */
         sym_close_scope();
         return;
     }

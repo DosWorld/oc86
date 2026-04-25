@@ -136,10 +136,35 @@ VarDecl     = ident { "," ident } [ "*" ] ":" type ";" .
 ProcDecl    = "PROCEDURE" ident [ "*" ] [ FormalParams ] [ ":" type ]
               ";" [ CallingConv ";" ] [ "EXTERNAL" ";" ]
             | "PROCEDURE" ident [ "*" ] [ FormalParams ] [ ":" type ]
+              ";" "INLINE" "(" InlineEntry { "," InlineEntry } ")" ";"
+            | "PROCEDURE" ident [ "*" ] [ FormalParams ] [ ":" type ]
               ";" [ CallingConv ";" ]
               DeclSeq
               [ "BEGIN" StatSeq ]
               "END" ident ";" .
+
+InlineEntry = integer | ident .
+(* InlineEntry: either a hex/decimal byte literal (0..255) or a formal parameter name.
+   Two emission modes selected automatically by pe_emit_inline_call:
+
+   ADDRESS mode (pattern has at least one formal-parameter-name entry):
+     No args are pushed.  Each param-name entry emits a 2-byte little-endian address:
+     BP offset (signed 16-bit) for local/param actuals, or DS offset (unsigned 16-bit)
+     plus a DATA relocation entry for global variable actuals.
+     Example: PROCEDURE LoadWord*(VAR x: INTEGER): INTEGER; INLINE(08BH, 006H, x);
+
+   VALUE mode (pattern has only raw-byte entries, no param-name entries):
+     All actual arguments are pushed via parse_actual_params (ADDRESS=4 bytes, INTEGER=2).
+     The byte pattern uses POP instructions to consume them; must restore SP exactly.
+     Example: SYSTEM.MOVE and SYSTEM.FILL use POP CX/DI/ES/SI/AX sequences.
+
+   There is no CALL instruction; the byte sequence is emitted directly at the call site.
+   INLINE procs: no code body; no FAR/NEAR/EXTERNAL modifier allowed; can be exported (*).
+   Exported inline procs are stored in .def as INLINE/BYTES records for cross-module use.
+   STACK BALANCE RULE (mandatory): SP before the inline call MUST equal SP after.
+   Every PUSH in the byte pattern must be matched by a corresponding POP or ADD SP,n.
+   Unbalanced inline patterns corrupt the caller stack and cause undefined behavior. *)
+
 (* "*" exports the procedure (implicitly FAR; cannot be NEAR).
    "FAR" or "NEAR" (context-sensitive idents, not keywords) declare calling convention.
    Default: exported → FAR; top-level non-exported → NEAR; nested → NEAR (with hidden SL).
@@ -162,7 +187,8 @@ FPSection   = [ "VAR" ] ident { "," ident } ":" type   (* typed VAR or value par
    Typeless VAR (no ": type"): callee receives the ADDRESS of the actual argument.
      The parameter has type ADDRESS inside the procedure body.
      Caller auto-computes the address (same as ADR(actual)).
-     SYSTEM.PUT/GET accept full ADDRESS (any segment); use SYSTEM.ADR(actual) to pass.
+     SYSTEM.GET/PUT/MOVE/FILL accept full ADDRESS (any segment); use SYSTEM.ADR(actual) to pass.
+     Procedure names are also accepted: SYSTEM.ADR(P) pushes CS:code_offset of P.
      Extension inspired by Turbo Pascal; not in standard Oberon-07. *)
 
 DeclSeq     = { ( "CONST" { ConstDecl } )
@@ -333,23 +359,26 @@ ProcCallExpr = designator "(" [ ActualParams ] ")" .
 SysIntrinsicExpr = SysIdent "(" SysArgs ")" .
 (* SYSTEM intrinsics used as expressions (via SYSTEM.xxx qualified name): *)
 
-SysIdent    = "ADR" | "VAL" | "PTR" | "SEG" | "OFS"
-            | "LSL" | "LSR" | "ASR" | "ROR" .
-(* ADR(v)      → ADDRESS: full far pointer (segment:offset) for any variable form.
-   VAL(T, x)  → T: bit-reinterpret x as type T (sizes must match).
-   PTR(s, o)  → ADDRESS: construct far pointer DX:AX from segment s and offset o.
-   SEG(v)     → INTEGER: segment register of v (SS for locals, DS for globals, heap seg for p^).
-   OFS(v)     → INTEGER: offset of v within its segment.
-   LSL(x, n)  → same: logical shift left.
-   LSR(x, n)  → same: logical shift right.
-   ASR(x, n)  → same: arithmetic shift right.
-   ROR(x, n)  → same: rotate right. *)
+SysIdent    = "VAL" | "LSL" | "LSR" | "ASR" | "ROR" .
+(* VAL(T, x)  → T: bit-reinterpret x as type T (sizes must match). Compiler built-in.
+   LSL(x, n)  → same: logical shift left.  Compiler built-in (INTEGER/LONGINT dispatch).
+   LSR(x, n)  → same: logical shift right. Compiler built-in.
+   ASR(x, n)  → same: arithmetic shift right. Compiler built-in.
+   ROR(x, n)  → same: rotate right. Compiler built-in. *)
 
-(* SYSTEM procedures used as statements (via SYSTEM.xxx qualified name): *)
-(* GET(src: ADDRESS; VAR dst)      — read word from far pointer src into dst (any segment). *)
-(* PUT(dst: ADDRESS; expr)         — write word expr to far pointer dst (any segment). *)
-(* MOVE(src, dst: ADDRESS; n: INTEGER) — REP MOVSB: copy n bytes from far src to far dst (any segment). *)
-(* FILL(dst: ADDRESS; n: INTEGER; b: BYTE) — REP STOSB: fill n bytes at far dst with byte (any segment). *)
+(* SYSTEM statement intrinsic (compiler built-in, requires typed designator store): *)
+(* GET(src: ADDRESS; VAR dst)  — read word from far pointer src into dst (any segment). *)
+
+(* The following are INLINE procedures in SYSTEM.mod (typeless VAR, POP-based): *)
+(* ADR(VAR v): ADDRESS    — POP AX=offset, POP DX=segment; result DX:AX = far address of v.
+                            Works for locals, globals, VAR params, array elems, pointer derefs,
+                            and procedure names (SYSTEM.ADR(P) → CS:code_offset of P). *)
+(* SEG(VAR v): INTEGER    — POP AX (discard offset), POP AX=segment; result AX = segment of v. *)
+(* OFS(VAR v): INTEGER    — POP AX=offset, POP CX (discard segment); result AX = offset of v. *)
+(* PTR(s, o: INTEGER): ADDRESS — POP AX=o (offset), POP DX=s (segment); result DX:AX. *)
+(* PUT(a: ADDRESS; x: INTEGER) — POP AX=x, POP BX=offset, POP ES=segment; MOV ES:[BX],AX. *)
+(* MOVE(VAR src, dst; n: INTEGER) — POP-based inline: REP MOVSB copy (any segment). *)
+(* FILL(VAR dst; n: INTEGER; b: BYTE) — POP-based inline: REP STOSB fill (any segment). *)
 
 
 (* ---- DESIGNATOR ---- *)

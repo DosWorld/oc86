@@ -46,6 +46,10 @@ void cg_emit2(uint8_t b0, uint8_t b1);
 void cg_emit3(uint8_t b0, uint8_t b1, uint8_t b2);
 void cg_emitw(uint16_t w);
 void cg_emitd(uint32_t d);
+/* Emit a fixed-size byte string into the code segment.
+   Use for fixed multi-byte sequences with no embedded computed values.
+   str is treated as raw bytes (not NUL-terminated); size must match exactly. */
+void cg_emit_code_str(uint16_t size, const char *str);
 void cg_emit_data_byte(uint8_t b);
 void cg_emit_data_word(uint16_t w);
 void cg_emit_data_zero(uint16_t n);

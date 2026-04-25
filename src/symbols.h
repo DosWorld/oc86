@@ -45,15 +45,8 @@
 #define SP_FLOOR  10
 #define SP_DISPOSE 11  /* SYSTEM extension: free a heap pointer */
 /* SYSTEM compiler intrinsic IDs (qualified via SYSTEM.xxx, not in SYSTEM.def) */
-#define SP_ADR    12   /* SYSTEM.ADR(v)      -> ADDRESS  */
 #define SP_VAL    13   /* SYSTEM.VAL(T,x)    -> T        */
 #define SP_GET    14   /* SYSTEM.GET(a,v)    procedure   */
-#define SP_PUT    15   /* SYSTEM.PUT(a,x)    procedure   */
-#define SP_MOVE   16   /* SYSTEM.MOVE(s,d,n) procedure   */
-#define SP_PTR    17   /* SYSTEM.PTR(s,o)    -> ADDRESS  */
-#define SP_SEG    18   /* SYSTEM.SEG(v)      -> INTEGER  */
-#define SP_OFS    19   /* SYSTEM.OFS(v)      -> INTEGER  */
-#define SP_FILL   20   /* SYSTEM.FILL(d,n,b) procedure   */
 #define SP_LSL    21   /* SYSTEM.LSL(x,n)    -> INTEGER  logical shift left  */
 #define SP_LSR    24   /* SYSTEM.LSR(x,n)    -> INTEGER  logical shift right */
 #define SP_ASR    22   /* SYSTEM.ASR(x,n)    -> INTEGER  arithmetic shift right */
@@ -76,6 +69,17 @@
 
 #define MAX_LEVEL   8
 #define NAME_LEN   33
+
+/* One entry in an INLINE procedure byte pattern:
+   is_param=0: raw_byte is emitted as-is.
+   is_param=1: param_idx selects a formal parameter; at call site, the
+               actual argument's address is emitted as a signed 16-bit
+               word (BP offset for locals, DS offset for globals with reloc). */
+typedef struct {
+    int     is_param;
+    uint8_t raw_byte;
+    int     param_idx;  /* index into pt->params list (0-based) */
+} InlineEntry;
 
 typedef struct TypeDesc TypeDesc;
 typedef struct Symbol   Symbol;
@@ -102,6 +106,10 @@ struct TypeDesc {
     int32_t   arg_size;   /* total param bytes (pascal) */
     int       is_far;     /* 1 = FAR calling convention (params start at BP+6) */
     int       has_sl;    /* 1 = nested proc: hidden static link at [BP+4], params at [BP+6] */
+    /* inline proc */
+    int          is_inline;    /* 1 = inline procedure: no CALL, bytes emitted at use site */
+    InlineEntry *inline_data;  /* malloc'd array of entries (NULL if not inline) */
+    int          n_inline;     /* number of entries in inline_data */
 };
 
 struct Symbol {

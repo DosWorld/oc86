@@ -23,4 +23,8 @@ void pe_emit_push_static_link(int def_level);
 /* Forward declaration of parse_type (defined in parser.c, called from pexpr.c) */
 void pe_parse_type(TypeDesc **out);
 
+/* Emit an inline procedure byte pattern with actual arg address substitution.
+   Defined in parser.c; used by pexpr.c for inline calls in expression context. */
+void pe_emit_inline_call(TypeDesc *pt);
+
 #endif

@@ -17,6 +17,14 @@ void cg_emit3(uint8_t b0, uint8_t b1, uint8_t b2) { cg_emit1(b0); cg_emit1(b1); 
 void cg_emitw(uint16_t w) { cg_emit1((uint8_t)(w & 0xFF)); cg_emit1((uint8_t)(w >> 8)); }
 void cg_emitd(uint32_t d) { cg_emitw((uint16_t)(d & 0xFFFF)); cg_emitw((uint16_t)(d >> 16)); }
 
+void cg_emit_code_str(uint16_t size, const char *str) {
+    while (size != 0) {
+        emit_byte(&cg_obj, SEG_CODE, (uint8_t)*str);
+        str++;
+        size--;
+    }
+}
+
 void cg_emit_data_byte(uint8_t b)   { emit_byte(&cg_obj, SEG_DATA, b); }
 void cg_emit_data_word(uint16_t w)  { emit_word(&cg_obj, SEG_DATA, w); }
 /* Bulk zero fill: single bounds check + memset (was N emit_byte calls). */
@@ -36,20 +44,16 @@ void cg_emit_data_string(const char *s) {
 
 /* ---- frame ---- */
 void cg_prologue(uint16_t local_bytes) {
-    cg_emit1(0x55);              /* PUSH BP          */
-    cg_emit2(0x8B, 0xEC);        /* MOV  BP, SP      */
-    cg_emit2(0x81, 0xEC);        /* SUB  SP, imm16   */
+    cg_emit_code_str(5, "\x55\x8B\xEC\x81\xEC"); /* PUSH BP / MOV BP,SP / SUB SP,imm16 */
     cg_emitw(local_bytes);
 }
 
 void cg_epilogue(uint16_t arg_bytes) {
-    cg_emit2(0x8B, 0xE5);        /* MOV SP, BP       */
-    cg_emit1(0x5D);              /* POP BP           */
+    cg_emit_code_str(3, "\x8B\xE5\x5D"); /* MOV SP,BP / POP BP */
     if (arg_bytes == 0) {
-        cg_emit1(OP_RET);        /* RET              */
+        cg_emit1(OP_RET);
     } else {
-        cg_emit1(OP_RET_N);      /* RET imm16        */
-        cg_emitw(arg_bytes);
+        cg_emit1(OP_RET_N); cg_emitw(arg_bytes);
     }
 }
 
@@ -130,13 +134,11 @@ void cg_call_far(int import_id) {
 }
 
 void cg_epilogue_far(uint16_t arg_bytes) {
-    cg_emit2(0x8B, 0xE5);          /* MOV SP, BP       */
-    cg_emit1(0x5D);                /* POP BP           */
+    cg_emit_code_str(3, "\x8B\xE5\x5D"); /* MOV SP,BP / POP BP */
     if (arg_bytes == 0) {
-        cg_emit1(OP_RETF);         /* RETF             */
+        cg_emit1(OP_RETF);
     } else {
-        cg_emit1(OP_RETF_N);       /* RETF imm16       */
-        cg_emitw(arg_bytes);
+        cg_emit1(OP_RETF_N); cg_emitw(arg_bytes);
     }
 }
 
@@ -244,13 +246,11 @@ void cg_load_addr_bp(int32_t ofs) {
    etc. */
 void cg_sl_load_bx(int hops) {
     /* First hop: MOV BX, [BP+4] — BP uses SS by default */
-    cg_emit3(0x8B, 0x5E, 0x04);   /* MOV BX, [BP+4] */
+    cg_emit_code_str(3, "\x8B\x5E\x04"); /* MOV BX, [BP+4] */
     hops--;
     /* Additional hops: MOV BX, SS:[BX+4] — BX uses DS by default; override to SS */
-    while (hops-- > 0) {
-        cg_emit1(0x36);              /* SS: prefix */
-        cg_emit3(0x8B, 0x5F, 0x04); /* MOV BX, [BX+4] */
-    }
+    while (hops-- > 0)
+        cg_emit_code_str(4, "\x36\x8B\x5F\x04"); /* SS: MOV BX, [BX+4] */
 }
 
 /* Load word from outer frame variable at [outer_BP + ofs] into AX.
@@ -412,43 +412,39 @@ void cg_les_bx_mem(uint16_t data_ofs) {
 
 /* Move far pointer from DX:AX to ES:BX */
 void cg_dxax_to_esbx(void) {
-    cg_emit2(0x8B, 0xD8);   /* MOV BX, AX */
-    cg_emit2(0x8E, 0xC2);   /* MOV ES, DX  (8E C2 = MOV ES, DX) */
+    cg_emit_code_str(4, "\x8B\xD8\x8E\xC2"); /* MOV BX,AX / MOV ES,DX */
 }
 
 /* Dereference far pointer: MOV AX, ES:[BX]  (assumes ES:BX set up) */
 void cg_deref_far(void) {
-    cg_emit2(OP_ES_PFX, 0x8B); cg_emit1(0x07);  /* 26 8B 07 */
+    cg_emit_code_str(3, "\x26\x8B\x07"); /* ES: MOV AX,[BX] */
 }
 
 /* Dereference far pointer: byte load — MOV AL, ES:[BX]; zero-extend to AX */
 void cg_deref_far_byte(void) {
-    cg_emit2(OP_ES_PFX, 0x8A); cg_emit1(0x07);  /* 26 8A 07 = MOV AL, ES:[BX] */
-    cg_emit2(0x25, 0xFF); cg_emit1(0x00);         /* AND AX, 00FFh — zero high byte */
+    cg_emit_code_str(6, "\x26\x8A\x07\x25\xFF\x00"); /* ES: MOV AL,[BX] / AND AX,00FFh */
 }
 
 /* Store AX through far pointer in ES:BX: MOV ES:[BX], AX */
 void cg_store_deref_far(void) {
-    cg_emit2(OP_ES_PFX, 0x89); cg_emit1(0x07);  /* 26 89 07 */
+    cg_emit_code_str(3, "\x26\x89\x07"); /* ES: MOV [BX],AX */
 }
 
 /* Store AL through far pointer in ES:BX: MOV ES:[BX], AL (byte store) */
 void cg_store_deref_far_byte(void) {
-    cg_emit2(OP_ES_PFX, 0x88); cg_emit1(0x07);  /* 26 88 07 */
+    cg_emit_code_str(3, "\x26\x88\x07"); /* ES: MOV [BX],AL */
 }
 
 /* Load 32-bit LONGINT through far pointer ES:BX into DX:AX.
    MOV AX, ES:[BX]  then  MOV DX, ES:[BX+2] */
 void cg_deref_far_long(void) {
-    cg_emit2(OP_ES_PFX, 0x8B); cg_emit1(0x07);        /* 26 8B 07: MOV AX, ES:[BX]   */
-    cg_emit3(OP_ES_PFX, 0x8B, 0x57); cg_emit1(0x02);  /* 26 8B 57 02: MOV DX, ES:[BX+2] */
+    cg_emit_code_str(7, "\x26\x8B\x07\x26\x8B\x57\x02"); /* ES:MOV AX,[BX] / ES:MOV DX,[BX+2] */
 }
 
 /* Store DX:AX as 32-bit LONGINT through far pointer ES:BX.
    MOV ES:[BX], AX  then  MOV ES:[BX+2], DX */
 void cg_store_deref_far_long(void) {
-    cg_emit2(OP_ES_PFX, 0x89); cg_emit1(0x07);        /* 26 89 07: MOV ES:[BX], AX   */
-    cg_emit3(OP_ES_PFX, 0x89, 0x57); cg_emit1(0x02);  /* 26 89 57 02: MOV ES:[BX+2], DX */
+    cg_emit_code_str(7, "\x26\x89\x07\x26\x89\x57\x02"); /* ES:MOV [BX],AX / ES:MOV [BX+2],DX */
 }
 
 /* Legacy near-ptr deref kept for reference; NOT used with far pointers */
@@ -568,44 +564,36 @@ void cg_push_dxax(void) { cg_emit1(0x52); cg_emit1(0x50); }
 /* POP BX; POP CX — restore 32-bit into CX:BX (hi:lo) from stack */
 void cg_pop_cxbx(void) { cg_emit1(0x5B); cg_emit1(0x59); }
 
-/* 32-bit ADD: DX:AX += CX:BX  (caller: LHS in DX:AX pushed, RHS in DX:AX; after pop CX:BX) */
+/* 32-bit ADD: DX:AX += CX:BX */
 void cg_add32(void) {
-    cg_emit2(0x03, 0xC3);   /* ADD AX, BX */
-    cg_emit2(0x13, 0xD1);   /* ADC DX, CX */
+    cg_emit_code_str(4, "\x03\xC3\x13\xD1"); /* ADD AX,BX / ADC DX,CX */
 }
 
-/* 32-bit SUB: DX:AX = CX:BX - DX:AX  (LHS in CX:BX, RHS in DX:AX) */
+/* 32-bit SUB: DX:AX = CX:BX - DX:AX */
 void cg_sub32(void) {
-    cg_emit2(0x87, 0xC3);   /* XCHG AX, BX  (now AX=LHS_lo, BX=RHS_lo) */
-    cg_emit2(0x2B, 0xC3);   /* SUB  AX, BX  (AX = LHS_lo - RHS_lo) */
-    cg_emit2(0x87, 0xD1);   /* XCHG DX, CX  (now DX=LHS_hi, CX=RHS_hi) */
-    cg_emit2(0x1B, 0xD1);   /* SBB  DX, CX  (DX = LHS_hi - RHS_hi - borrow) */
+    cg_emit_code_str(8, "\x87\xC3\x2B\xC3\x87\xD1\x1B\xD1");
+    /* XCHG AX,BX / SUB AX,BX / XCHG DX,CX / SBB DX,CX */
 }
 
-/* 32-bit NEG: DX:AX = -DX:AX  (NOT+ADD+ADC is the correct 8086 approach) */
+/* 32-bit NEG: DX:AX = -DX:AX */
 void cg_neg32(void) {
-    cg_emit2(0xF7, 0xD0);   /* NOT AX */
-    cg_emit2(0xF7, 0xD2);   /* NOT DX */
-    cg_emit2(0x05, 0x01); cg_emit1(0x00);  /* ADD AX, 1 */
-    cg_emit2(0x83, 0xD2); cg_emit1(0x00);  /* ADC DX, 0 */
+    cg_emit_code_str(10, "\xF7\xD0\xF7\xD2\x05\x01\x00\x83\xD2\x00");
+    /* NOT AX / NOT DX / ADD AX,1 / ADC DX,0 */
 }
 
 /* 32-bit AND: DX:AX &= CX:BX */
 void cg_and32(void) {
-    cg_emit2(0x23, 0xC3);   /* AND AX, BX */
-    cg_emit2(0x23, 0xD1);   /* AND DX, CX */
+    cg_emit_code_str(4, "\x23\xC3\x23\xD1"); /* AND AX,BX / AND DX,CX */
 }
 
 /* 32-bit OR: DX:AX |= CX:BX */
 void cg_or32(void) {
-    cg_emit2(0x0B, 0xC3);   /* OR  AX, BX */
-    cg_emit2(0x0B, 0xD1);   /* OR  DX, CX */
+    cg_emit_code_str(4, "\x0B\xC3\x0B\xD1"); /* OR AX,BX / OR DX,CX */
 }
 
 /* 32-bit XOR: DX:AX ^= CX:BX */
 void cg_xor32(void) {
-    cg_emit2(0x33, 0xC3);   /* XOR AX, BX */
-    cg_emit2(0x33, 0xD1);   /* XOR DX, CX */
+    cg_emit_code_str(4, "\x33\xC3\x33\xD1"); /* XOR AX,BX / XOR DX,CX */
 }
 
 /* 32-bit signed comparison: CX:BX (LHS) op DX:AX (RHS) → AX = 0 or 1.
@@ -972,14 +960,9 @@ void cg_cmp_ax_imm(int16_t val) { cg_emit1(0x3D); cg_emitw((uint16_t)val); }
    After: ZF=1 iff LHS==RHS (both offset and segment equal).
    Clobbers: AX, CX, DX. */
 void cg_ptr_cmp_eq(void) {
-    /* Stack layout (top to bottom): LHS_ofs, LHS_seg */
-    cg_emit1(0x59);             /* POP CX    ; CX = LHS offset */
-    cg_emit2(0x33, 0xC1);      /* XOR AX,CX ; AX=0 iff offsets equal */
-    cg_emit1(0x5B);             /* POP BX    ; BX = LHS segment */
-    cg_emit2(0x33, 0xD3);      /* XOR DX,BX ; DX=0 iff segments equal */
-    cg_emit2(0x0B, 0xC2);      /* OR  AX,DX ; AX=0 iff both equal */
-    /* TEST AX,AX sets ZF; caller uses cg_setcc(OP_JZ) for = or cg_setcc(OP_JNZ) for # */
-    cg_test_ax();
+    /* Stack layout (top to bottom): LHS_ofs, LHS_seg.
+       POP CX / XOR AX,CX / POP BX / XOR DX,BX / OR AX,DX / TEST AX,AX */
+    cg_emit_code_str(10, "\x59\x33\xC1\x5B\x33\xD3\x0B\xC2\x85\xC0");
 }
 
 /* ---- shift/rotate (8086 real mode, 16-bit) ----
@@ -1336,26 +1319,24 @@ void cg_fchs(void) { cg_emit2(0xD9, 0xE0); }
    Load back:
      SS: FLD qword [BX]  = 36 DD 07 */
 void cg_fpush(void) {
-    cg_emit2(0x83, 0xEC); cg_emit1(0x08);  /* SUB SP, 8 */
-    cg_emit2(0x89, 0xE3);                   /* MOV BX, SP */
-    cg_emit2(0x36, 0xDD); cg_emit1(0x1F);  /* SS: FSTP qword [BX] */
+    /* SUB SP,8 / MOV BX,SP / SS: FSTP qword [BX] */
+    cg_emit_code_str(8, "\x83\xEC\x08\x89\xE3\x36\xDD\x1F");
 }
 void cg_fpop(void) {
-    cg_emit2(0x89, 0xE3);                   /* MOV BX, SP */
-    cg_emit2(0x36, 0xDD); cg_emit1(0x07);  /* SS: FLD qword [BX] */
-    cg_emit2(0x83, 0xC4); cg_emit1(0x08);  /* ADD SP, 8 */
+    /* MOV BX,SP / SS: FLD qword [BX] / ADD SP,8 */
+    cg_emit_code_str(8, "\x89\xE3\x36\xDD\x07\x83\xC4\x08");
 }
 
 /* FISTP: truncate ST(0) to integer, store to [SS:BX].
    For FLOOR: set rounding mode to round-toward-neg-inf first. */
 void cg_fist_ax(void) {
-    /* FISTP word temp on stack; MOV AX, temp
-       SUB SP,2; MOV BX,SP; SS: FISTP word [BX]; MOV AX,[SS:BX]; ADD SP,2 */
-    cg_emit2(0x83, 0xEC); cg_emit1(0x02);  /* SUB SP, 2 */
-    cg_emit2(0x89, 0xE3);                   /* MOV BX, SP */
-    cg_emit2(0x36, 0xDF); cg_emit1(0x1F);  /* SS: FISTP word [BX] */
-    cg_emit2(0x36, 0x8B); cg_emit1(0x07);  /* MOV AX, SS:[BX] */
-    cg_emit2(0x83, 0xC4); cg_emit1(0x02);  /* ADD SP, 2 */
+    /* SUB SP,2 / MOV BX,SP / SS:FISTP word [BX] / SS:MOV AX,[BX] / ADD SP,2 */
+    cg_emit_code_str(14,
+        "\x83\xEC\x02"     /* SUB SP, 2       */
+        "\x89\xE3"         /* MOV BX, SP      */
+        "\x36\xDF\x1F"     /* SS: FISTP [BX]  */
+        "\x36\x8B\x07"     /* SS: MOV AX,[BX] */
+        "\x83\xC4\x02");   /* ADD SP, 2       */
 }
 
 /* FLOOR: truncate toward -inf using FSTCW/FLDCW to set rounding mode,
@@ -1376,38 +1357,23 @@ void cg_fist_ax(void) {
    FLDCW [SS:BX]                  ; restore original control word
    ADD SP,4 */
 void cg_floor_ax(void) {
-    /* SUB SP,4 */
-    cg_emit2(0x83, 0xEC); cg_emit1(0x04);
-    /* MOV BX, SP */
-    cg_emit2(0x89, 0xE3);
-    /* FSTCW [SS:BX] */
-    cg_emit2(0x36, 0xD9); cg_emit1(0x3F);
-    /* MOV AX, [SS:BX] */
-    cg_emit2(0x36, 0x8B); cg_emit1(0x07);
-    /* AND AX, 0F3FFh */
-    cg_emit2(0x25, 0xFF); cg_emit1(0xF3);
-    /* OR AX, 0400h */
-    cg_emit2(0x0D, 0x00); cg_emit1(0x04);
-    /* MOV [SS:BX+2], AX */
-    cg_emit2(0x36, 0x89); cg_emit1(0x47); cg_emit1(0x02);
-    /* FLDCW [SS:BX+2] */
-    cg_emit2(0x36, 0xD9); cg_emit1(0x6F); cg_emit1(0x02);
-    /* SUB SP, 2 */
-    cg_emit2(0x83, 0xEC); cg_emit1(0x02);
-    /* MOV BX, SP */
-    cg_emit2(0x89, 0xE3);
-    /* FISTP word [SS:BX] */
-    cg_emit2(0x36, 0xDF); cg_emit1(0x1F);
-    /* MOV AX, [SS:BX] */
-    cg_emit2(0x36, 0x8B); cg_emit1(0x07);
-    /* ADD SP, 2 */
-    cg_emit2(0x83, 0xC4); cg_emit1(0x02);
-    /* MOV BX, SP (= old SP-4, pointing to saved CW) */
-    cg_emit2(0x89, 0xE3);
-    /* FLDCW [SS:BX] */
-    cg_emit2(0x36, 0xD9); cg_emit1(0x2F);
-    /* ADD SP, 4 */
-    cg_emit2(0x83, 0xC4); cg_emit1(0x04);
+    cg_emit_code_str(47,
+        "\x83\xEC\x04"         /* SUB SP, 4            */
+        "\x89\xE3"             /* MOV BX, SP           */
+        "\x36\xD9\x3F"         /* SS: FSTCW [BX]       */
+        "\x36\x8B\x07"         /* SS: MOV AX, [BX]     */
+        "\x25\xFF\xF3"         /* AND AX, 0F3FFh       */
+        "\x0D\x00\x04"         /* OR  AX, 0400h        */
+        "\x36\x89\x47\x02"     /* SS: MOV [BX+2], AX   */
+        "\x36\xD9\x6F\x02"     /* SS: FLDCW [BX+2]     */
+        "\x83\xEC\x02"         /* SUB SP, 2            */
+        "\x89\xE3"             /* MOV BX, SP           */
+        "\x36\xDF\x1F"         /* SS: FISTP word [BX]  */
+        "\x36\x8B\x07"         /* SS: MOV AX, [BX]     */
+        "\x83\xC4\x02"         /* ADD SP, 2            */
+        "\x89\xE3"             /* MOV BX, SP           */
+        "\x36\xD9\x2F"         /* SS: FLDCW [BX]       */
+        "\x83\xC4\x04");       /* ADD SP, 4            */
 }
 
 /* FPU compare: FCOMPP (DE D9) pops both, sets C3/C2/C0.

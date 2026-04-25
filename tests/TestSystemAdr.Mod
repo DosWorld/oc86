@@ -1,6 +1,6 @@
 MODULE TestSystemAdr;
 (* Tests for SYSTEM.ADR applied to procedures, global/local variables,
-   records, arrays, array elements, record fields, and uplevel variables. *)
+   records, arrays, array elements, record fields, VAR params, and uplevel variables. *)
 
 IMPORT Out;
 
@@ -180,27 +180,28 @@ BEGIN
 END TestLocalRecord;
 
 (* ------------------------------------------------------------------ *)
-(* Test 7: ADR of procedure name                                        *)
-(* ADR returns a non-zero code-segment offset.                         *)
-(* Store in proc variable and call through it to confirm correctness.  *)
+(* Test 8: ADR of uplevel variable from nested procedure               *)
+(* ------------------------------------------------------------------ *)
+(* ------------------------------------------------------------------ *)
+(* Test 7: ADR of procedure name → CS:code_offset                      *)
+(* ADR returns a non-zero code-segment offset; segment = CS.           *)
+(* Verify segment = CS (via SYSTEM.SEG trick) and offset non-zero.    *)
 (* ------------------------------------------------------------------ *)
 PROCEDURE TestProcAddr*;
-VAR fn: PROCEDURE(): INTEGER;
-    adr: SYSTEM.ADDRESS;
+VAR adr: SYSTEM.ADDRESS;
+    fn: PROCEDURE(): INTEGER;
     result: INTEGER;
 BEGIN
   BeginTest("ADR of procedure name");
   adr := SYSTEM.ADR(TargetProc);
   Check("proc adr non-zero", adr # 0);
-  (* assign via normal proc-variable mechanism and call *)
+  (* verify indirect call still works via normal proc variable *)
   fn := TargetProc;
   result := fn();
   IF result # 42 THEN Fail("call via procvar", result, 42) END;
   EndTest
 END TestProcAddr;
 
-(* ------------------------------------------------------------------ *)
-(* Test 8: ADR of uplevel variable from nested procedure               *)
 (* ------------------------------------------------------------------ *)
 PROCEDURE TestUplevelAdr*;
 VAR outer: INTEGER;

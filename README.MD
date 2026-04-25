@@ -57,7 +57,6 @@ oberonc/
   docs/         Grammar, ABI, build and linker reference
   CLAUDE.md     Developer guide for Claude Code sessions
   MANUAL.MD     Programmer manual: dialect, ABI, calling conventions, open arrays
-  2FIX.MD       Audit log of fixed and deferred issues
 ```
 
 Standard library modules (in lib/)

@@ -143,7 +143,7 @@ BEGIN
     p := x;
     regs.AX := 4000H;
     regs.BX := r.f.h;
-    regs.CX := 1;
+    regs.CX := len;
     regs.DS := SYSTEM.SEG(p^);
     regs.DX := SYSTEM.OFS(p^);
     regs.Flags := 0;
