@@ -60,13 +60,10 @@ Symbol *type_add_field(TypeDesc *rec, const char *name, TypeDesc *ftype) {
     f->offset = off;
     rec->size  = off + ftype->size;
     rec->n_fields++;
-    /* append */
-    if (!rec->fields) { rec->fields = f; }
-    else {
-        Symbol *last = rec->fields;
-        while (last->next) last = last->next;
-        last->next = f;
-    }
+    /* append O(1) via tail pointer */
+    if (rec->fields_tail) rec->fields_tail->next = f;
+    else                  rec->fields = f;
+    rec->fields_tail = f;
     return f;
 }
 
@@ -89,12 +86,10 @@ Symbol *type_add_param(TypeDesc *pt, const char *name,
     p->kind = is_var ? K_VARPARAM : K_PARAM;
     p->type = ptype;
     pt->n_params++;
-    if (!pt->params) { pt->params = p; }
-    else {
-        Symbol *last = pt->params;
-        while (last->next) last = last->next;
-        last->next = p;
-    }
+    /* append O(1) via tail pointer */
+    if (pt->params_tail) pt->params_tail->next = p;
+    else                 pt->params = p;
+    pt->params_tail = p;
     return p;
 }
 

@@ -1,7 +1,10 @@
 #include "compat.h"
 #include <string.h>
 #include <stdio.h>
-#include <ctype.h>
+
+static int ascii_upper(int c) {
+    return (c >= 'a' && c <= 'z') ? c - 'a' + 'A' : c;
+}
 
 char *path_basename(const char *path) {
     const char *p = path;
@@ -44,7 +47,7 @@ int file_exists(const char *path) {
 void str_upcase(char *dst, int dstsz, const char *src) {
     int i = 0;
     while (src[i] && i < dstsz - 1) {
-        dst[i] = (char)toupper((unsigned char)src[i]);
+        dst[i] = (char)ascii_upper((unsigned char)src[i]);
         i++;
     }
     dst[i] = '\0';

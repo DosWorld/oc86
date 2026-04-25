@@ -90,11 +90,13 @@ struct TypeDesc {
     TypeDesc *elem;
     /* record */
     Symbol   *fields;
+    Symbol   *fields_tail;
     TypeDesc *base;
     int       tag_ofs;
     int       n_fields;
     /* proc */
     Symbol   *params;
+    Symbol   *params_tail;
     TypeDesc *ret_type;
     int       n_params;
     int32_t   arg_size;   /* total param bytes (pascal) */

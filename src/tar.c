@@ -2,8 +2,6 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <ctype.h>
-
 /* ustar header layout (POSIX.1-1988) */
 typedef struct {
     char name[100];
@@ -83,6 +81,9 @@ void tar_add_file(FILE *f, const char *name,
 
     /* compute and write checksum */
     csum = tar_checksum(&h);
+    /* 7-char octal field can represent at most 2097151; a 512-byte header of
+       all-0xFF bytes sums to 130816, well under the limit. Assert to be safe. */
+    if (csum >= 2097152u) { fputs("tar: checksum overflow\n", stderr); return; }
     /* stored as 6-digit octal + NUL + space (POSIX convention) */
     fill_octal(cs, 7, csum);
     cs[7] = ' ';
@@ -111,14 +112,18 @@ static uint32_t parse_octal(const char *field, int width) {
     return val;
 }
 
+static int ascii_upper(int c) {
+    return (c >= 'a' && c <= 'z') ? c - 'a' + 'A' : c;
+}
+
 static int str_icmp(const char *a, const char *b) {
     while (*a && *b) {
-        int ca = toupper((unsigned char)*a);
-        int cb = toupper((unsigned char)*b);
+        int ca = ascii_upper((unsigned char)*a);
+        int cb = ascii_upper((unsigned char)*b);
         if (ca != cb) return ca - cb;
         a++; b++;
     }
-    return toupper((unsigned char)*a) - toupper((unsigned char)*b);
+    return ascii_upper((unsigned char)*a) - ascii_upper((unsigned char)*b);
 }
 
 /* Return the basename of a path (pointer to last component). */

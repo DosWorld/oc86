@@ -73,7 +73,7 @@ DOS memory model (brief): real-mode 16-bit segmented addressing (segment:offset)
   - Linker computes `total_data_len` and `total_bss_len`. Data+BSS must fit within a single 64KB segment (implementation enforces a limit ≈ 65520 bytes).
 
 - Stack placement:
-  - SS is set to a paragraph after code+data_bss; the loader initialises SS:SP. The compiler/linker reserve STACK_SIZE (default 8192) in the image layout.
+  - SS is set to a paragraph after code+data_bss; the loader initialises SS:SP. Stack size defaults to 8192 bytes; override with `$M size` in source (written as `META-INF/STACK.TXT` into the entry `.om`, read by `olink` to set the MZ SP field).
 
 - Addressing conventions and ADR/SEG/OFS:
   - ADR(variable) yields a full far ADDRESS (DX:AX): DX = segment paragraph, AX = offset within that segment. Locals use SS, globals use DS. Procedure addresses use the code group's CS paragraph.
@@ -204,6 +204,7 @@ Notes:
 - Linking failures (unresolved IMPORT): ensure your .rdf is included in a .om (use `$L` in a .Mod) and exported symbol names match exactly.
 - DS/SS confusion: remember locals use SS, globals use DS; use SYSTEM.ADR to obtain correct full far addresses.
 - FPU errors: if code uses FPU ensure SYSTEM_REQUIRE87 is available or avoid floating point.
+- Oberon module names and the language syntax are case-sensitive
 
 ## License and contact
 Public domain. License in LICENSE.TXT.

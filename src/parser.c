@@ -13,12 +13,55 @@
 
 int parser_errors = 0;
 int parser_system_mode = 0; /* 1 = compiling SYSTEM itself: no implicit SYSTEM import */
+const char *parser_entry_proc = NULL; /* -entry: must exist and be exported after parsing */
+char parser_mod_name[33] = ""; /* module name read from source; set after MODULE keyword */
 ExtraRdf *parser_extra_rdfs_head = NULL;
 static ExtraRdf *parser_extra_rdfs_tail = NULL;
 int        parser_n_extra_rdfs = 0;
+long       parser_stack_size = 0;
+
+/* Read the whole file at 'path' into a newly-malloc'd buffer.
+   On success, *out_buf points to the bytes and *out_len holds the length.
+   Returns 0 on success, non-zero on failure (file missing, too large, OOM).
+   Cap enforces the 16-bit malloc ceiling (Open Watcom large model). */
+#define PARSER_READ_MAX 65000L
+static int read_file_to_buf(const char *path, uint8_t **out_buf, long *out_len) {
+    FILE *f;
+    long len;
+    uint8_t *buf;
+    *out_buf = NULL; *out_len = 0;
+    f = fopen(path, "rb");
+    if (!f) return -1;
+    fseek(f, 0, SEEK_END); len = ftell(f); rewind(f);
+    if (len <= 0 || len > PARSER_READ_MAX) { fclose(f); return -2; }
+    buf = (uint8_t *)malloc((size_t)len);
+    if (!buf) { fclose(f); return -3; }
+    if (fread(buf, 1, (size_t)len, f) != (size_t)len) {
+        free(buf); fclose(f); return -4;
+    }
+    fclose(f);
+    *out_buf = buf; *out_len = len;
+    return 0;
+}
 
 void parser_syscomment(Scanner *s, char directive, const char *arg) {
-    if (directive == 'L') {
+    if (directive == 'M') {
+        /* $M stack_size — stack size hint (LONGINT); stored in META-INF/STACK.TXT
+           when compiling with -entry.  Only the last $M wins. */
+        long val = 0;
+        const char *p = arg;
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p >= '0' && *p <= '9') {
+            val = 0;
+            while (*p >= '0' && *p <= '9') { val = val * 10 + (*p - '0'); p++; }
+        }
+        if (val <= 0) {
+            fprintf(stderr, "%s(%d): $M directive requires a positive integer\n",
+                    s->filename, s->line);
+        } else {
+            parser_stack_size = val;
+        }
+    } else if (directive == 'L') {
         if (parser_n_extra_rdfs < PARSER_MAX_EXTRA_RDFS) {
             const char *start = arg;
             const char *end;
@@ -53,10 +96,57 @@ Scanner *pe_sc;                  /* current scanner, set by parse_module */
 static char cur_mod[NAME_LEN];   /* current module name (set by parse_module) */
 int pe_mod_uses_fpu = 0;         /* shared with pexpr.c via pstate.h */
 
-/* RETURN statement backpatches: collected during parse_proc_decl, patched at epilogue */
-#define MAX_RETURNS 64
-static Backpatch ret_patches[MAX_RETURNS];
-static int       n_ret_patches = 0;
+/* Generic forward-jump backpatch list node — used by RETURN, IF (end jumps),
+   CASE (arm-end and body jumps), and anywhere else we need an unbounded list
+   of forward jumps to patch later. All nodes are malloc'd; callers patch and
+   free via bp_list_patch_free(). */
+typedef struct BpNode { Backpatch bp; struct BpNode *next; } BpNode;
+
+/* Prepend a new node (with fresh cg_jmp_near/cg_cond_near already emitted) */
+static BpNode *bp_list_push(BpNode *head) {
+    BpNode *n = (BpNode *)malloc(sizeof(BpNode));
+    if (!n) { pe_error("out of memory"); return NULL; }
+    n->next = head;
+    return n;
+}
+
+/* Patch every forward jump in the list to the current PC, then free the list */
+static void bp_list_patch_free(BpNode *head) {
+    while (head) { BpNode *nx = head->next; cg_patch_near(&head->bp); free(head); head = nx; }
+}
+
+/* RETURN statement backpatches: unbounded list reused per procedure */
+static BpNode *ret_patch_list = NULL;
+
+/* Ident-list node: accumulates a comma-separated list of identifiers with
+   optional export marker (*). Used by VAR, RECORD field, and procedure
+   parameter declarations where the source syntax is
+       a, b, c* : T
+   Linked list so there is no hard cap on identifier count. */
+typedef struct IdentNode {
+    char name[NAME_LEN];
+    int  exported;
+    struct IdentNode *next;
+} IdentNode;
+
+static void idlist_free(IdentNode *head) {
+    while (head) { IdentNode *nx = head->next; free(head); head = nx; }
+}
+
+/* Append one ident (copy of 'name', exported flag) to tail of list. Returns new head. */
+static IdentNode *idlist_append(IdentNode *head, IdentNode **tail,
+                                const char *name, int exported) {
+    IdentNode *n = (IdentNode *)malloc(sizeof(IdentNode));
+    if (!n) { pe_error("out of memory"); return head; }
+    strncpy(n->name, name, NAME_LEN-1);
+    n->name[NAME_LEN-1] = '\0';
+    n->exported = exported;
+    n->next = NULL;
+    if (*tail) (*tail)->next = n;
+    else       head = n;
+    *tail = n;
+    return head;
+}
 
 /* Prologue frame size patch: address of the imm16 in SUB SP, imm16.
    parse_for_stat updates the frame size here after allocating $lim. */
@@ -154,7 +244,7 @@ static int n_fwd_refs = 0;
    STATEMENTS
    ================================================================ */
 void parse_if_stat(TypeDesc *ret_type) {
-    Backpatch end_patches[64]; int n_end=0; int i;
+    BpNode *end_list = NULL;
     Item cond;
     Backpatch jf;
     scanner_next(sc);  /* consume IF */
@@ -164,15 +254,15 @@ void parse_if_stat(TypeDesc *ret_type) {
         cg_cond_near(OP_JZ, &jf);
         expect(T_THEN);
         parse_stat_seq(ret_type);
-        if (n_end < 64) cg_jmp_near(&end_patches[n_end++]);
-        else error("too many ELSIF branches (max 64)");
+        { BpNode *n = bp_list_push(end_list);
+          if (n) { cg_jmp_near(&n->bp); end_list = n; } }
         cg_patch_near(&jf);
         if (sc->sym==T_ELSIF) scanner_next(sc);
         else break;
     }
     if (sc->sym==T_ELSE) { scanner_next(sc); parse_stat_seq(ret_type); }
     expect(T_END);
-    for (i=0;i<n_end;i++) cg_patch_near(&end_patches[i]);
+    bp_list_patch_free(end_list);
 }
 
 void parse_while_stat(TypeDesc *ret_type) {
@@ -248,7 +338,7 @@ int parse_const_label(void) {
 void parse_case_stat(TypeDesc *ret_type) {
     Symbol *case_sym;
     Item case_load;
-    Backpatch end_patches[64]; int n_end = 0, i;
+    BpNode *end_list = NULL;
 
     scanner_next(sc);   /* consume CASE */
     /* evaluate case expression into AX, store in hidden local $case */
@@ -271,7 +361,7 @@ void parse_case_stat(TypeDesc *ret_type) {
         /* parse label list; for each label emit a comparison + conditional jump to body.
            Collect "jump-to-body" patches; after all labels, emit unconditional jump
            past the body (to next arm). Then patch body-jumps here and emit body. */
-        Backpatch body_patches[32]; int n_body = 0;
+        BpNode *body_list = NULL;
         Backpatch skip_arm;
 
         /* emit label checks; each successful match jumps to arm body */
@@ -287,17 +377,21 @@ void parse_case_stat(TypeDesc *ret_type) {
                 cg_load_item(&case_load);        /* AX = case expr */
                 cg_cmp_ax_imm(lo);               /* CMP AX, lo */
                 { Backpatch skip_lo;
+                  BpNode *n;
                   cg_cond_near(0x7C /*JL*/, &skip_lo); /* JL skip (< lo) */
                   cg_cmp_ax_imm(hi);                    /* CMP AX, hi */
-                  if (n_body < 32) cg_cond_near(OP_JLE, &body_patches[n_body++]); /* JLE body */
+                  n = bp_list_push(body_list);
+                  if (n) { cg_cond_near(OP_JLE, &n->bp); body_list = n; } /* JLE body */
                   cg_patch_near(&skip_lo); }
             } else {
                 /* single value */
+                BpNode *n;
                 case_load.mode=M_LOCAL; case_load.adr=case_sym->adr;
                 case_load.type=type_integer; case_load.is_ref=0; case_load.sl_hops=0;
                 cg_load_item(&case_load);        /* AX = case expr */
                 cg_cmp_ax_imm(lo);               /* CMP AX, lo */
-                if (n_body < 32) cg_cond_near(OP_JZ, &body_patches[n_body++]); /* JE body */
+                n = bp_list_push(body_list);
+                if (n) { cg_cond_near(OP_JZ, &n->bp); body_list = n; } /* JE body */
             }
             if (sc->sym == T_COMMA) { scanner_next(sc); continue; }
             break;
@@ -305,11 +399,12 @@ void parse_case_stat(TypeDesc *ret_type) {
         /* no label matched: jump past arm body to next arm / ELSE / END */
         cg_jmp_near(&skip_arm);
         /* patch all body jumps to here (start of arm body) */
-        for (i = 0; i < n_body; i++) cg_patch_near(&body_patches[i]);
+        bp_list_patch_free(body_list);
         expect(T_COLON);
         parse_stat_seq(ret_type);
         /* after arm body: jump to END */
-        if (n_end < 64) cg_jmp_near(&end_patches[n_end++]);
+        { BpNode *n = bp_list_push(end_list);
+          if (n) { cg_jmp_near(&n->bp); end_list = n; } }
         /* patch skip_arm to here (start of next arm's label checks) */
         cg_patch_near(&skip_arm);
         if (sc->sym == T_BAR) scanner_next(sc);
@@ -321,7 +416,7 @@ void parse_case_stat(TypeDesc *ret_type) {
     }
     expect(T_END);
     /* patch all arm-end jumps to here */
-    for (i = 0; i < n_end; i++) cg_patch_near(&end_patches[i]);
+    bp_list_patch_free(end_list);
 }
 
 void parse_for_stat(TypeDesc *ret_type) {
@@ -407,10 +502,8 @@ void parse_return_stat(TypeDesc *ret_type) {
         error("RETURN value required");
     }
     /* emit unconditional forward jump to epilogue; patch later */
-    if (n_ret_patches < MAX_RETURNS)
-        cg_jmp_near(&ret_patches[n_ret_patches++]);
-    else
-        error("too many RETURN statements (max 64)");
+    { BpNode *rp = bp_list_push(ret_patch_list);
+      if (rp) { cg_jmp_near(&rp->bp); ret_patch_list = rp; } }
 }
 
 void parse_sysproc_call(int id) {
@@ -742,7 +835,6 @@ void parse_type(TypeDesc **out) {
     TypeDesc *elem;
     TypeDesc *base;
     TypeDesc *rec;
-    char names[16][NAME_LEN]; int exported_flags[16]; int n; int i;
     TypeDesc *ft;
     TypeDesc *pt;
     int is_var;
@@ -814,20 +906,22 @@ void parse_type(TypeDesc **out) {
         }
         rec = type_new_record(base);
         while (sc->sym==T_IDENT) {
-            n=0;
+            IdentNode *fhead = NULL, *ftail = NULL, *fi;
+            int fexp;
             do {
-                strncpy(names[n], sc->id, NAME_LEN-1); scanner_next(sc);
-                exported_flags[n] = (sc->sym==T_STAR) ? 1 : 0;
-                if (sc->sym==T_STAR) scanner_next(sc);
-                n++;
+                char nm[NAME_LEN]; strncpy(nm, sc->id, NAME_LEN-1); nm[NAME_LEN-1]='\0';
+                scanner_next(sc);
+                fexp = 0; if (sc->sym==T_STAR) { fexp = 1; scanner_next(sc); }
+                fhead = idlist_append(fhead, &ftail, nm, fexp);
                 if (sc->sym==T_COMMA) scanner_next(sc);
             } while (sc->sym==T_IDENT);
             expect(T_COLON);
             ft = type_integer; parse_type(&ft);
-            for (i=0;i<n;i++) {
-                Symbol *fs = type_add_field(rec, names[i], ft);
-                fs->exported = exported_flags[i];
+            for (fi = fhead; fi; fi = fi->next) {
+                Symbol *fs = type_add_field(rec, fi->name, ft);
+                fs->exported = fi->exported;
             }
+            idlist_free(fhead);
             if (sc->sym==T_SEMI) scanner_next(sc);
         }
         expect(T_END);
@@ -865,13 +959,15 @@ void parse_type(TypeDesc **out) {
         if (sc->sym==T_LPAREN) {
             scanner_next(sc);
             while (sc->sym!=T_RPAREN && sc->sym!=T_EOF) {
-                char tpnames[8][NAME_LEN]; int tnp = 0; int ti;
+                IdentNode *phead = NULL, *ptail = NULL, *pi;
                 int typeless_var2 = 0;
                 is_var = (sc->sym==T_VAR); if (is_var) scanner_next(sc);
                 do {
-                    strncpy(tpnames[tnp++], sc->id, NAME_LEN-1); scanner_next(sc);
+                    char nm[NAME_LEN]; strncpy(nm, sc->id, NAME_LEN-1); nm[NAME_LEN-1]='\0';
+                    scanner_next(sc);
+                    phead = idlist_append(phead, &ptail, nm, 0);
                     if (sc->sym==T_COMMA) scanner_next(sc);
-                } while (tnp < 8 && sc->sym!=T_COLON && sc->sym!=T_SEMI && sc->sym!=T_RPAREN && sc->sym!=T_EOF);
+                } while (sc->sym!=T_COLON && sc->sym!=T_SEMI && sc->sym!=T_RPAREN && sc->sym!=T_EOF);
                 if (sc->sym==T_COLON) {
                     scanner_next(sc);
                     ptype = type_integer; parse_type(&ptype);
@@ -880,10 +976,11 @@ void parse_type(TypeDesc **out) {
                     typeless_var2 = 1;
                     ptype = type_address;
                 }
-                for (ti=0; ti<tnp; ti++) {
-                    Symbol *tp = type_add_param(pt, tpnames[ti], ptype, is_var);
+                for (pi = phead; pi; pi = pi->next) {
+                    Symbol *tp = type_add_param(pt, pi->name, ptype, is_var);
                     if (typeless_var2) tp->typeless = 1;
                 }
+                idlist_free(phead);
                 if (sc->sym==T_SEMI) scanner_next(sc);
             }
             expect(T_RPAREN);
@@ -963,36 +1060,39 @@ void parse_type_decl(void) {
 
 void parse_var_decl(void) {
     while (sc->sym==T_IDENT) {
-        char names[16][NAME_LEN]; int exported_flags[16]; int n=0; int i;
+        IdentNode *head = NULL, *tail = NULL, *it;
         TypeDesc *t;
         Symbol *s;
         char gname[NAME_LEN*2];
+        int exported;
         do {
-            strncpy(names[n],sc->id,NAME_LEN-1); scanner_next(sc);
-            exported_flags[n] = 0;
-            if (sc->sym==T_STAR) { exported_flags[n]=1; scanner_next(sc); }
-            n++;
+            char nm[NAME_LEN]; strncpy(nm, sc->id, NAME_LEN-1); nm[NAME_LEN-1]='\0';
+            scanner_next(sc);
+            exported = 0;
+            if (sc->sym==T_STAR) { exported = 1; scanner_next(sc); }
+            head = idlist_append(head, &tail, nm, exported);
             if (sc->sym==T_COMMA) scanner_next(sc);
         } while (sc->sym==T_IDENT);
         expect(T_COLON);
         t = type_integer; parse_type(&t);
-        for (i=0;i<n;i++) {
-            if (sym_find_local(names[i])) { pe_error2("duplicate identifier", names[i]); }
-            s = sym_new(names[i], K_VAR);
-            s->exported = exported_flags[i];
+        for (it = head; it; it = it->next) {
+            if (sym_find_local(it->name)) { pe_error2("duplicate identifier", it->name); }
+            s = sym_new(it->name, K_VAR);
+            s->exported = it->exported;
             s->type = t;
             if (top_scope->level==0) {
                 /* global: allocate in data segment */
                 s->adr = cg_dpc();
                 cg_emit_data_zero(t->size);
                 if (s->exported) {
-                    snprintf(gname, sizeof(gname), "%s_%s", cur_mod, names[i]);
+                    snprintf(gname, sizeof(gname), "%s_%s", cur_mod, it->name);
                     rdf_add_global(&cg_obj, gname, SEG_DATA, s->adr);
                 }
             } else {
                 sym_alloc_local(s);
             }
         }
+        idlist_free(head);
         if (sc->sym==T_SEMI) scanner_next(sc);
     }
 }
@@ -1015,12 +1115,9 @@ void parse_proc_decl(void) {
     int exported;
     TypeDesc *pt;
     int is_var;
-    char pnames[8][NAME_LEN]; int np; int i;
     TypeDesc *ptype;
-    Symbol *pp;
-    Scope  *sc2;
-    Symbol *slist[16]; int ns; int pi;
-    Symbol *s; Symbol *p;
+    Symbol *p;
+    Symbol *s;
     char gname[NAME_LEN*2];
     uint16_t prologue_patch;
     uint16_t local_sz;
@@ -1042,12 +1139,14 @@ void parse_proc_decl(void) {
     if (sc->sym==T_LPAREN) {
         scanner_next(sc);
         while (sc->sym!=T_RPAREN && sc->sym!=T_EOF) {
+            IdentNode *phead = NULL, *ptail = NULL, *pi;
             int typeless_var = 0;
             is_var=(sc->sym==T_VAR); if (is_var) scanner_next(sc);
             /* ident list — stop at ':' (typed) or ';'/')' (typeless VAR) */
-            np=0;
             do {
-                strncpy(pnames[np++],sc->id,NAME_LEN-1); scanner_next(sc);
+                char nm[NAME_LEN]; strncpy(nm, sc->id, NAME_LEN-1); nm[NAME_LEN-1]='\0';
+                scanner_next(sc);
+                phead = idlist_append(phead, &ptail, nm, 0);
                 if (sc->sym==T_COMMA) scanner_next(sc);
             } while (sc->sym!=T_COLON && sc->sym!=T_SEMI && sc->sym!=T_RPAREN && sc->sym!=T_EOF);
             if (sc->sym==T_COLON) {
@@ -1059,13 +1158,14 @@ void parse_proc_decl(void) {
                 typeless_var = 1;
                 ptype = type_address;
             }
-            for (i=0;i<np;i++) {
-                p = type_add_param(pt, pnames[i], ptype, is_var);
+            for (pi = phead; pi; pi = pi->next) {
+                p = type_add_param(pt, pi->name, ptype, is_var);
                 /* also insert into scope */
-                s = sym_new(pnames[i], p->kind);
+                s = sym_new(pi->name, p->kind);
                 s->type = ptype;
                 if (typeless_var) { p->typeless = 1; s->typeless = 1; }
             }
+            idlist_free(phead);
             if (sc->sym==T_SEMI) scanner_next(sc);
         }
         expect(T_RPAREN);
@@ -1104,23 +1204,13 @@ void parse_proc_decl(void) {
 
     type_calc_arg_size(pt);
 
-    /* copy BP offsets from pt->params into scope symbols */
-    {
-        pp = pt->params;
-        sc2 = top_scope;
-        ns=0; pi=0;
-        /* scope symbols are in reverse order (prepended), params in forward order */
-        /* collect scope syms */
-        for (s=sc2->symbols; s; s=s->next) slist[ns++]=s;
-        /* assign in reverse (scope list is backwards) */
-        for (p=pp; p; p=p->next,pi++) {
-            /* find matching scope sym */
-            for (i=0;i<ns;i++) {
-                if (strcmp(slist[i]->name,p->name)==0) {
-                    slist[i]->adr = p->adr; break;
-                }
-            }
-        }
+    /* copy BP offsets from pt->params into scope symbols.
+       Scope holds the just-created param symbols (prepended, reverse order);
+       sym_find_local walks it once per param — O(n²) worst case but n is the
+       number of formal parameters for a single procedure, which is small. */
+    for (p = pt->params; p; p = p->next) {
+        Symbol *ss = sym_find_local(p->name);
+        if (ss) ss->adr = p->adr;
     }
 
     /* emit prologue placeholder */
@@ -1131,15 +1221,13 @@ void parse_proc_decl(void) {
     }
 
     /* save outer RETURN patches (this proc gets its own) */
-    { int saved_n_ret = n_ret_patches;
-      Backpatch saved_ret[MAX_RETURNS]; int ri;
+    { BpNode *saved_ret_list = ret_patch_list;
       uint16_t saved_prologue_patch = cur_prologue_patch;
       int saved_proc_depth = cur_proc_depth;
       Backpatch skip_nested;
-      for (ri = 0; ri < saved_n_ret; ri++) saved_ret[ri] = ret_patches[ri];
 
-    cur_proc_depth++;     /* entering this proc's body */
-    n_ret_patches = 0;  /* reset RETURN backpatch list for this procedure */
+    cur_proc_depth++;        /* entering this proc's body */
+    ret_patch_list = NULL;   /* reset RETURN backpatch list for this procedure */
 
     prologue_patch = cg_pc() + 5;  /* offset of imm16 in SUB SP, imm16 (after 55 8B EC 81 EC) */
     cur_prologue_patch = prologue_patch;
@@ -1172,14 +1260,13 @@ void parse_proc_decl(void) {
         scanner_next(sc);
     }
     /* patch all RETURN forward jumps to here (epilogue entry) */
-    { int ri; for (ri=0; ri<n_ret_patches; ri++) cg_patch_near(&ret_patches[ri]); }
+    bp_list_patch_free(ret_patch_list);
     if (pt->is_far) cg_epilogue_far(pt->arg_size);
     else            cg_epilogue(pt->arg_size);
     sym_close_scope();
 
     /* restore outer procedure's RETURN patches, cur_prologue_patch, and proc depth */
-    n_ret_patches = saved_n_ret;
-    for (ri = 0; ri < saved_n_ret; ri++) ret_patches[ri] = saved_ret[ri];
+    ret_patch_list = saved_ret_list;
     cur_prologue_patch = saved_prologue_patch;
     cur_proc_depth = saved_proc_depth;
     } /* end of saved-context block */
@@ -1191,9 +1278,30 @@ void parse_proc_decl(void) {
    MODULE
    ================================================================ */
 
-/* import list for __init: module alias names that need __init calls */
-static char init_imports[64][NAME_LEN];
-static int  n_init_imports = 0;
+/* import list for __init: module names that need __init calls (linked list) */
+typedef struct InitImp { char name[NAME_LEN]; struct InitImp *next; } InitImp;
+static InitImp *init_imports_head = NULL;
+static InitImp *init_imports_tail = NULL;
+static int      n_init_imports    = 0;
+
+static void init_imports_reset(void) {
+    InitImp *p = init_imports_head;
+    while (p) { InitImp *nx = p->next; free(p); p = nx; }
+    init_imports_head = init_imports_tail = NULL;
+    n_init_imports = 0;
+}
+
+static void init_imports_add(const char *name) {
+    InitImp *p = (InitImp *)malloc(sizeof(InitImp));
+    if (!p) { pe_error("out of memory"); return; }
+    strncpy(p->name, name, NAME_LEN-1);
+    p->name[NAME_LEN-1] = '\0';
+    p->next = NULL;
+    if (init_imports_tail) init_imports_tail->next = p;
+    else                   init_imports_head = p;
+    init_imports_tail = p;
+    n_init_imports++;
+}
 
 void parse_module(Scanner *s) {
     char mod_name[NAME_LEN];
@@ -1205,20 +1313,17 @@ void parse_module(Scanner *s) {
     char init_name[NAME_LEN*2];
     uint16_t init_ofs;
     uint16_t guard_ofs;
-    int ii;
     char dep_init[NAME_LEN*2];
     int dep_id;
     char rdf_name[NAME_LEN+4];
     char def_name[NAME_LEN+4];
-    FILE *df;
     char lib_name[NAME_LEN+4];
-    FILE *rf;
+    FILE *df;
+    FILE *lf;
     uint8_t *rdf_buf;
     long rdf_len;
-    FILE *df2;
     uint8_t *def_buf;
     long def_len;
-    FILE *lf;
 
     sc = s;
     sym_init();
@@ -1229,7 +1334,7 @@ void parse_module(Scanner *s) {
        Emitting 2 zero bytes here ensures the first real variable gets offset >= 2. */
     cg_emit_data_zero(2);
     parser_errors = 0;
-    n_init_imports = 0;
+    init_imports_reset();
     mod_uses_fpu = 0;
 
     /* SYSTEM is implicitly imported by every module unless -SYSTEM mode is active.
@@ -1240,6 +1345,8 @@ void parse_module(Scanner *s) {
     expect(T_MODULE);
     if (sc->sym!=T_IDENT) { error("module name expected"); return; }
     strncpy(mod_name, sc->id, NAME_LEN-1); scanner_next(sc);
+    strncpy(parser_mod_name, mod_name, sizeof(parser_mod_name)-1);
+    parser_mod_name[sizeof(parser_mod_name)-1] = '\0';
 
     /* Part 1: forbid '_' in module names */
     if (strchr(mod_name, '_')) {
@@ -1273,12 +1380,7 @@ void parse_module(Scanner *s) {
                 isym = sym_new(alias, K_IMPORT);
                 strncpy(isym->mod_name, iname, NAME_LEN-1);
                 /* record for __init dep call; SYSTEM excluded (never call SYSTEM__init) */
-                if (strcmp(iname, "SYSTEM") != 0) {
-                    if (n_init_imports < 64)
-                        strncpy(init_imports[n_init_imports++], iname, NAME_LEN-1);
-                    else
-                        error("too many imports (max 64)");
-                }
+                if (strcmp(iname, "SYSTEM") != 0) init_imports_add(iname);
                 /* load .def for type-aware access — fatal if not found */
                 load_explicit_import(iname, alias);
             }
@@ -1288,6 +1390,20 @@ void parse_module(Scanner *s) {
     }
 
     parse_decl_seq();
+
+    /* validate -entry proc: must exist at module level, be K_PROC, and be exported */
+    if (parser_entry_proc && parser_errors == 0) {
+        Symbol *ep = sym_find(parser_entry_proc);
+        if (!ep || ep->kind != K_PROC || ep->level != 0) {
+            fprintf(stderr, "%s: -entry '%s': procedure not found in module\n",
+                    s->filename, parser_entry_proc);
+            parser_errors++;
+        } else if (!ep->exported) {
+            fprintf(stderr, "%s: -entry '%s': procedure is not exported (add *)\n",
+                    s->filename, parser_entry_proc);
+            parser_errors++;
+        }
+    }
 
     /* ---- generate __init FAR function ---- */
     /* Case 1: no imports, no body → bare RETF
@@ -1318,7 +1434,7 @@ void parse_module(Scanner *s) {
         cg_emit1(OP_RETF);
     } else {
         /* Case 2 */
-        guard_ofs = cg_pc(); ii = 0;
+        guard_ofs = cg_pc();
         cg_emitw(0);                  /* mymodule__inited: dw 0 */
 
         init_ofs = cg_pc();
@@ -1354,11 +1470,12 @@ void parse_module(Scanner *s) {
         }
 
         /* call each imported module's __init (SYSTEM excluded) */
-        for (ii = 0; ii < n_init_imports; ii++) {
-            snprintf(dep_init, sizeof(dep_init), "%s__init", init_imports[ii]);
-            dep_id = rdf_add_import(&cg_obj, dep_init);
-            cg_call_far(dep_id);
-        }
+        { InitImp *ip;
+          for (ip = init_imports_head; ip; ip = ip->next) {
+              snprintf(dep_init, sizeof(dep_init), "%s__init", ip->name);
+              dep_id = rdf_add_import(&cg_obj, dep_init);
+              cg_call_far(dep_id);
+          } }
 
         /* module body */
         if (sc->sym == T_BEGIN) {
@@ -1391,25 +1508,9 @@ void parse_module(Scanner *s) {
         /* pack both into .om */
         snprintf(lib_name, sizeof(lib_name), "%s.om", mod_name);
 
-        /* read .rdf into memory for tar */
-        rf = fopen(rdf_name, "rb");
-        rdf_buf = NULL; rdf_len = 0;
-        if (rf) {
-            fseek(rf, 0, SEEK_END); rdf_len = ftell(rf); rewind(rf);
-            rdf_buf = (rdf_len > 0 && rdf_len <= 65000L) ? (uint8_t*)malloc((size_t)rdf_len) : NULL;
-            if (rdf_buf) fread(rdf_buf, 1, (size_t)rdf_len, rf);
-            fclose(rf);
-        }
-
-        /* read .def into memory for tar */
-        df2 = fopen(def_name, "rb");
-        def_buf = NULL; def_len = 0;
-        if (df2) {
-            fseek(df2, 0, SEEK_END); def_len = ftell(df2); rewind(df2);
-            def_buf = (def_len > 0 && def_len <= 65000L) ? (uint8_t*)malloc((size_t)def_len) : NULL;
-            if (def_buf) fread(def_buf, 1, (size_t)def_len, df2);
-            fclose(df2);
-        }
+        /* read .rdf and .def into memory for tar packaging */
+        read_file_to_buf(rdf_name, &rdf_buf, &rdf_len);
+        read_file_to_buf(def_name, &def_buf, &def_len);
 
         lf = fopen(lib_name, "wb");
         if (lf) {
@@ -1422,19 +1523,13 @@ void parse_module(Scanner *s) {
             /* extra .rdf files from $L directives — stored under USER/ prefix, uppercase */
             {
                 ExtraRdf *er;
+                uint8_t *ebuf; long elen;
+                char user_name[128];
                 for (er = parser_extra_rdfs_head; er; er = er->next) {
-                    FILE *ef; uint8_t *ebuf = NULL; long elen = 0;
-                    char user_name[128];
-                    ef = fopen(er->path, "rb");
-                    if (ef) {
-                        fseek(ef, 0, SEEK_END); elen = ftell(ef); rewind(ef);
-                        ebuf = (elen > 0 && elen <= 65000L) ? (uint8_t*)malloc((size_t)elen) : NULL;
-                        if (ebuf) fread(ebuf, 1, (size_t)elen, ef);
-                        fclose(ef);
-                        str_upcase(up_name, (int)sizeof(up_name),
-                                   path_basename(er->path));
+                    if (read_file_to_buf(er->path, &ebuf, &elen) == 0) {
+                        str_upcase(up_name, (int)sizeof(up_name), path_basename(er->path));
                         snprintf(user_name, sizeof(user_name), "USER/%s", up_name);
-                        tar_add_file(lf, user_name, ebuf, elen);
+                        tar_add_file(lf, user_name, ebuf, (size_t)elen);
                         free(ebuf);
                     } else {
                         fprintf(stderr, "oc: cannot open extra rdf '%s'\n", er->path);

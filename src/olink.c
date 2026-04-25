@@ -15,9 +15,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <ctype.h>
 
 #include "olink.h"
+#include "tar.h"
 
 /* ===================================================================
  * Internal constants
@@ -57,16 +57,21 @@ static char *xstrdup(const char *s)
     return p;
 }
 
+static int ascii_upper(int c) {
+    return (c >= 'a' && c <= 'z') ? c - 'a' + 'A' : c;
+}
+
 static void str_upper(char *s)
 {
-    while (*s) { *s = (char)toupper((unsigned char)*s); s++; }
+    while (*s) { *s = (char)ascii_upper((unsigned char)*s); s++; }
 }
 
 static char *str_trim(char *s)
 {
     char *end;
     while (*s && (unsigned char)*s <= ' ') s++;
-    end = s + (int)strlen(s) - 1;
+    if (!*s) return s;
+    end = s + strlen(s) - 1;
     while (end > s && (unsigned char)*end <= ' ') *end-- = '\0';
     return s;
 }
@@ -79,8 +84,8 @@ static int str_ends_with(const char *s, const char *suffix)
     char a, b;
     if (ls < lsuf) return 0;
     for (i = 0; i < lsuf; i++) {
-        a = (char)toupper((unsigned char)s[ls - lsuf + i]);
-        b = (char)toupper((unsigned char)suffix[i]);
+        a = (char)ascii_upper((unsigned char)s[ls - lsuf + i]);
+        b = (char)ascii_upper((unsigned char)suffix[i]);
         if (a != b) return 0;
     }
     return 1;
@@ -253,7 +258,6 @@ static TModule *alloc_module(LinkerState *ls, const char *fname,
                              int group_id)
 {
     TModule *p  = (TModule *)malloc(sizeof(TModule));
-    TModule *tail;
     if (!p) olink_error("out of memory");
     p->filename      = xstrdup(fname);
     p->is_lib_member = is_lib;
@@ -271,35 +275,45 @@ static TModule *alloc_module(LinkerState *ls, const char *fname,
     p->used          = 0;
     p->next          = NULL;
 
-    if (!ls->mod_head) {
-        ls->mod_head = p;
-    } else {
-        tail = ls->mod_head;
-        while (tail->next) tail = tail->next;
-        tail->next = p;
-    }
+    /* O(1) tail append */
+    if (ls->mod_tail) ls->mod_tail->next = p;
+    else              ls->mod_head = p;
+    ls->mod_tail = p;
     return p;
+}
+
+static unsigned int sym_hash_key(const char *name)
+{
+    unsigned int h = 0;
+    while (*name) { h = h * 31u + (unsigned char)*name++; }
+    return h & (SYM_HASH_SIZE - 1);
 }
 
 static void add_symbol(LinkerState *ls, const char *name,
                        TModule *owner, uint8_t seg_id, uint32_t offset)
 {
+    unsigned int slot;
     TSymbol *p = (TSymbol *)malloc(sizeof(TSymbol));
     if (!p) olink_error("out of memory");
-    p->name   = xstrdup(name);
-    p->owner  = owner;
-    p->seg_id = seg_id;
-    p->offset = offset;
-    p->next   = ls->sym_head;
+    p->name      = xstrdup(name);
+    p->owner     = owner;
+    p->seg_id    = seg_id;
+    p->offset    = offset;
+    p->next      = ls->sym_head;
     ls->sym_head = p;
+    /* insert into hash table */
+    slot = sym_hash_key(name);
+    p->hash_next = ls->sym_hash[slot];
+    ls->sym_hash[slot] = p;
 }
 
 static TSymbol *find_symbol(LinkerState *ls, const char *name)
 {
-    TSymbol *p = ls->sym_head;
+    unsigned int slot = sym_hash_key(name);
+    TSymbol *p = ls->sym_hash[slot];
     while (p) {
         if (strcmp(p->name, name) == 0) return p;
-        p = p->next;
+        p = p->hash_next;
     }
     return NULL;
 }
@@ -561,6 +575,7 @@ static void scan_file(LinkerState *ls, const char *raw_name)
 void olink_init(LinkerState *ls)
 {
     memset(ls, 0, sizeof(*ls));
+    ls->stack_size = STACK_SIZE;
 }
 
 void olink_free(LinkerState *ls)
@@ -1015,7 +1030,7 @@ void olink_write_exe(LinkerState *ls, const char *out_filename)
      *   [0 .. code_para-1]                  code segments (one per .om group;
      *                                        modules within a group share one CS)
      *   [code_para .. code_para+data_bss_para-1]  combined data+BSS segment
-     *   [code_para+data_bss_para ..]        stack segment (STACK_SIZE bytes)
+     *   [code_para+data_bss_para ..]        stack segment (ls->stack_size bytes)
      *
      * The MZ header fields SS and CS are relative to the load segment.
      * The loader sets load_seg = PSP_segment + 0x10 (segment after PSP).
@@ -1023,7 +1038,7 @@ void olink_write_exe(LinkerState *ls, const char *out_filename)
      *   CS = load_seg + hdr_para + entry_cs_para
      *   DS = load_seg + hdr_para + code_para
      *   SS = load_seg + hdr_para + code_para + data_bss_para
-     *   SP = STACK_SIZE - 2
+     *   SP = ls->stack_size - 2
      */
 
     /* MZ header fields */
@@ -1035,7 +1050,7 @@ void olink_write_exe(LinkerState *ls, const char *out_filename)
     uint16_t f_min_alloc = 0;     /* no extra paragraphs beyond the image */
     uint16_t f_max_alloc = 0xFFFF; /* give as much memory as DOS offers */
     uint16_t f_ss;
-    uint16_t f_sp        = (uint16_t)(STACK_SIZE - 2);
+    uint16_t f_sp        = (uint16_t)(ls->stack_size - 2);
     uint16_t f_csum      = 0;
     uint16_t f_ip;
     uint16_t f_cs;
@@ -1136,12 +1151,12 @@ void olink_write_exe(LinkerState *ls, const char *out_filename)
         strncpy(bn, path_basename(out_filename), sizeof(bn) - 1);
         bn[sizeof(bn) - 1] = '\0';
         str_upper(bn);
-        printf("%s: Code=%lu, Data=%lu, BSS=%lu, Stack=%d\n",
+        printf("%s: Code=%lu, Data=%lu, BSS=%lu, Stack=%lu\n",
                bn,
                (unsigned long)ls->total_code_len,
                (unsigned long)ls->total_data_len,
                (unsigned long)ls->total_bss_len,
-               STACK_SIZE);
+               (unsigned long)ls->stack_size);
     }
 }
 
@@ -1210,6 +1225,36 @@ int main(int argc, char **argv)
     }
 
     olink_smart_link(&ls);
+
+    /* Read META-INF/STACK.TXT from entry .om to override default stack size. */
+    {
+        TSymbol *start_sym = find_symbol(&ls, "start");
+        if (start_sym && start_sym->owner && start_sym->owner->filename) {
+            FILE *sf = tar_extract_file(start_sym->owner->filename,
+                                        "STACK.TXT");
+            if (sf) {
+                char buf[32];
+                if (fgets(buf, (int)sizeof(buf), sf)) {
+                    long val = 0;
+                    char *p = buf;
+                    while (*p == ' ' || *p == '\t') p++;
+                    if (*p >= '0' && *p <= '9') {
+                        val = 0;
+                        while (*p >= '0' && *p <= '9') {
+                            val = val * 10 + (*p - '0');
+                            p++;
+                        }
+                    }
+                    if (val >= 2 && val <= 65536)
+                        ls.stack_size = (uint32_t)val;
+                    else
+                        fprintf(stderr, "olink: META-INF/STACK.TXT: invalid stack size %ld, using default\n", val);
+                }
+                fclose(sf);
+            }
+        }
+    }
+
     olink_calculate_layout(&ls);
     olink_perform_linking(&ls);
     olink_write_exe(&ls, out_filename);

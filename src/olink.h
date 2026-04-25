@@ -41,7 +41,8 @@ struct TSymbol {
     TModule     *owner;
     uint8_t      seg_id;   /* 0=code,1=data,2=bss */
     uint32_t     offset;
-    TSymbol     *next;
+    TSymbol     *next;       /* iteration / free list */
+    TSymbol     *hash_next;  /* hash bucket chain */
 };
 
 /* ---- MZ relocation entry ---- */
@@ -63,10 +64,15 @@ struct TImportNode {
 /* Stack segment size in bytes (separate segment after data+BSS). */
 #define STACK_SIZE     8192
 
+/* Hash table size for symbol lookup (power of 2). */
+#define SYM_HASH_SIZE 256
+
 /* ---- linker state (all globals collected here) ---- */
 typedef struct {
     TModule     *mod_head;
+    TModule     *mod_tail;
     TSymbol     *sym_head;
+    TSymbol     *sym_hash[SYM_HASH_SIZE]; /* hash buckets for fast lookup */
     TMZReloc    *reloc_head;
     TMZReloc    *reloc_tail;
     uint8_t     *code_buf;
@@ -85,6 +91,9 @@ typedef struct {
 
     /* group ID counter: each .om file (or standalone .rdf) gets a unique group */
     int          next_group_id;
+
+    /* stack segment size in bytes; default STACK_SIZE, overridden by META-INF/STACK.TXT */
+    uint32_t     stack_size;
 } LinkerState;
 
 /* ---- public API ---- */

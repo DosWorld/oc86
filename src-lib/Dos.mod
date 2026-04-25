@@ -40,9 +40,17 @@ BEGIN
     RETURN p^
 END ReadByte;
 
-PROCEDURE ArgInit;
+PROCEDURE GetPsp*:INTEGER;
 VAR
     regs    : SYSTEM.Registers;
+BEGIN
+    regs.AX := 6200H;
+    SYSTEM.Intr(21H, regs);
+    RETURN regs.BX;
+END GetPsp;
+
+PROCEDURE ArgInit;
+VAR
     psp     : INTEGER;
     len     : INTEGER;
     pos     : INTEGER;
@@ -58,9 +66,7 @@ BEGIN
     ai        := 1;
     bi        := 1;    (* next free slot in argBuf; slot 0 = empty argv[0] *)
 
-    regs.AX := 6200H;
-    SYSTEM.Intr(21H, regs);
-    psp := regs.BX;
+    psp := GetPsp();
 
     len := ORD(ReadByte(psp, 80H));
 

@@ -29,7 +29,7 @@ cd src && make tests        # builds unit test binaries only (in tests/)
 Or manually:
 ```bash
 cc -O2 -Wall -std=c89 -o oc main.c scanner.c symbols.c codegen.c rdoff.c parser.c tar.c def.c compat.c
-cc -O2 -Wall -std=c89 -o olink olink.c compat.c
+cc -O2 -Wall -std=c89 -o olink olink.c compat.c tar.c
 ```
 
 ---
@@ -114,6 +114,25 @@ helpers like `SYS.RDF`), list them with `$L` so the resulting `.om` is self-cont
 
 If a `$L` path cannot be opened, a warning is printed to stderr and the `.om` is still
 written with all successfully read extra files.
+
+### Set stack size hint
+
+Use the `$M` system comment directive to declare the required stack size (in bytes):
+
+```oberon
+(*$M 65536*)           (* request 64 KB stack *)
+//$M 32768             (* line-comment form *)
+```
+
+The directive may appear anywhere in the source (before or after `MODULE`).  The value must
+be a positive decimal integer (treated as a LONGINT byte count).  When the module is compiled
+with `-entry`, the value is written as a plain decimal text file `META-INF/STACK.TXT` inside
+the `.om` archive.  If multiple `$M` directives appear, the last one wins.  The directive is
+silently ignored (no file written) when compiling without `-entry`.  An invalid value (zero or
+non-numeric) produces a warning on stderr.
+
+The linker (`olink`) reads `META-INF/STACK.TXT` from the entry `.om` (if present) to override
+the default stack size of 8192 bytes.  Valid range: 2–65536.  Invalid or absent → default.
 
 ### Compile with entry point
 

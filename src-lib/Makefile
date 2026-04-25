@@ -1,33 +1,36 @@
 OC      = ../src/oc
 LIBDIR  = ../lib
 
-all: SYSTEM.lib Out.lib In.lib Strings.lib Files.lib Crt.lib Dos.lib
+all: SYSTEM.om Out.om Out87.om In.om Strings.om Files.om Crt.om Dos.om
 
 install: all
-	cp SYSTEM.lib Out.lib In.lib Strings.lib Files.lib Dos.lib Crt.lib $(LIBDIR)/
+	cp SYSTEM.om Out.om Out87.om In.om Strings.om Files.om Dos.om Crt.om $(LIBDIR)/
 
-SYSTEM.lib: SYSTEM.RDF SYSTEM.DEF $(OC)
-	$(OC) --make-lib SYSTEM.RDF SYSTEM.DEF
+SYSTEM.om: SYS.RDF SYSTEM.mod $(OC)
+	$(OC) -SYSTEM SYSTEM.mod
 
-Out.lib: Out.mod SYSTEM.lib $(OC)
+Out.om: Out.mod SYSTEM.om $(OC)
 	OBERON_LIB=. $(OC) Out.mod
 
-In.lib: In.mod SYSTEM.lib $(OC)
+Out87.om: Out87.mod Out.om SYSTEM.om $(OC)
+	OBERON_LIB=. $(OC) Out87.mod
+
+In.om: In.mod SYSTEM.om $(OC)
 	OBERON_LIB=. $(OC) In.mod
 
-Files.lib: Files.mod SYSTEM.lib $(OC)
+Files.om: Files.mod SYSTEM.om $(OC)
 	OBERON_LIB=. $(OC) Files.mod
 
-Strings.lib: Strings.mod SYSTEM.lib $(OC)
+Strings.om: Strings.mod SYSTEM.om $(OC)
 	OBERON_LIB=. $(OC) Strings.mod
 
-Dos.lib: Dos.mod SYSTEM.lib $(OC)
+Dos.om: Dos.mod SYSTEM.om $(OC)
 	OBERON_LIB=. $(OC) Dos.mod
 
-Crt.lib: Crt.mod SYSTEM.lib $(OC)
+Crt.om: Crt.mod SYSTEM.om $(OC)
 	OBERON_LIB=. $(OC) Crt.mod
 
 clean:
-	rm -f SYSTEM.lib Out.lib Strings.lib Files.lib Dos.lib Crt.lib In.lib
+	rm -f SYSTEM.om Out.om Out87.om Strings.om Files.om Dos.om Crt.om In.om
 
 .PHONY: all install clean

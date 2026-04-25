@@ -1,72 +1,174 @@
-Oberon-07 compiler targeting MS-DOS real mode
-==============================================================
+oc86 — Oberon-07 compiler for MS-DOS real mode (16-bit)
+========================================================
 
-oc86 is a small Oberon-07 compiler (in C89) that produces RDOFF2 object files and `.om` archives suitable for linking into DOS MZ executables with `olink`. The project targets the MS-DOS real-mode large memory model (CS<>DS<>SS) and is designed to be portable between GCC/Clang (host) and Open Watcom (DOS large model).
+Summary
+-------
+`oc86` is a C89 compiler for the Oberon-07 language that targets MS-DOS real-mode large memory model (CS≠DS≠SS). It produces RDOFF2 object files and `.om` archive libraries, which are linked into DOS MZ executables by the bundled `olink` smart linker. The toolchain runs on Linux/macOS (GCC/Clang) for development and can also be compiled by Open Watcom for native DOS use.
 
 Key features
 ------------
-- Oberon-07 dialect with practical extensions (typeless VAR, open-array ABI, system comment directives).
-- Generates RDOFF2 `.rdf` + `.def` and packs into `.om` archives.
-- Linker `olink` that emits DOS MZ executables and performs reachability-based linking.
-- x87 FPU support for REAL/LONGREAL and large-model 16-bit portability rules.
+- Full Oberon-07 subset with practical extensions (see "Language extensions" below).
+- RDOFF2 code generation with smart linking — only reachable modules are emitted.
+- x87 FPU support: REAL (32-bit) and LONGREAL (64-bit) arithmetic, comparison, and conversion.
+- LONGINT (32-bit signed integers) with helpers for multiplication, division, and modulus.
+- SET type (16-bit): literals, ranges, set operators (+, -, *, /), and IN membership test.
+- Constant expression folding for CONST declarations.
+- FAR/NEAR procedure calling conventions with procedural variables.
+- Nested procedures with full static-link uplevel variable access (up to 3 hops).
+- Dynamic allocation: NEW/DISPOSE with typed and sized variants; ADDRESS far pointers.
+- Forward and self-referential POINTER TO RECORD types within a TYPE section.
+- SYSTEM intrinsics: GET, PUT, MOVE, FILL, ADR, SEG, OFS, VAL, PTR, LSL, LSR, ASR, ROR.
+- EXTERNAL procedure declarations (body provided by an external .rdf at link time).
+- $L directive to pack hand-assembled .rdf files into .om archives.
+- $M directive to declare stack size; stored as `META-INF/STACK.TXT` in the `.om` when using `-entry`.
+- Import namespace isolation: imported symbols keyed as `alias.name` to prevent collisions.
+- Unbounded linked-list accumulator lists — no silent truncation on large modules.
+
+Language extensions (vs. standard Oberon-07)
+---------------------------------------------
+- `//` single-line comments.
+- `(*$L path.rdf*)` / `//$L path.rdf` system comment to include extra .rdf in .om.
+- `FAR` / `NEAR` context-sensitive modifiers on PROCEDURE declarations and types.
+- `EXTERNAL` modifier on PROCEDURE declarations (no body; resolved at link time).
+- `VAR name` without `: type` (typeless VAR, Turbo-Pascal style) — callee receives ADDRESS.
+- `ADDRESS` built-in type (4-byte far pointer, any segment).
+- `FLOAT(x)` as a synonym for `REAL(x)`.
+- `ENTIER(x)` as a synonym for `FLOOR(x)`.
+- `ARRAY m, n OF T` multi-dimensional array sugar (desugared to nested arrays, up to 7 dims).
+- Named integer constants as array dimension: `ARRAY N OF T`.
+- `NEW(p, n)` sized allocation (n is a runtime byte-count expression).
+- `SYSTEM.Registers`, `SYSTEM.Intr`, `SYSTEM.FZero`, `SYSTEM.FSign`, `SYSTEM.FCarry` from DOS/SYSTEM library.
+- Implicit INTEGER→REAL/LONGREAL coercion in binary expressions (both orderings, all operators).
+
+Standard features that are NOT implemented
+-------------------------------------------
+- `IS` type test (scanned but not codegen'd).
+- Array bounds checking.
+- Mutual recursion via non-pointer fields across a TYPE section (requires two-pass scanner).
+
+Directory layout
+----------------
+```
+oberonc/
+  src/          C89 compiler (oc) + smart linker (olink)
+  src-lib/      Oberon library sources + hand-assembled SYSTEM helpers
+  lib/          Compiled library output (built by src-lib/Makefile install)
+  tests/        Unit test sources (.c) and integration test modules (.Mod)
+  docs/         Grammar, ABI, build and linker reference
+  CLAUDE.md     Developer guide for Claude Code sessions
+  MANUAL.MD     Programmer manual: dialect, ABI, calling conventions, open arrays
+  2FIX.MD       Audit log of fixed and deferred issues
+```
+
+Standard library modules (in lib/)
+-----------------------------------
+| Module   | Purpose                                          |
+|----------|--------------------------------------------------|
+| SYSTEM   | Runtime helpers: alloc, halt, FPU check, INT calls |
+| Out      | Character, string, integer, hex output to stdout |
+| Out87    | REAL / LONGREAL formatted output (needs FPU)     |
+| In       | Stdin input (integers, strings)                  |
+| Strings  | Length, Pos, Append, Insert, Delete, Replace, Extract |
+| Files    | DOS file I/O (open, read, write, close, seek)    |
+| Crt      | Terminal: cursor, clear, colour (DOS INT 10h)    |
+| Dos      | DOS interface: ARGCOUNT, ARG, command-line args  |
 
 Getting started
 ---------------
 Requirements:
-- gcc/clang (Linux/macOS) or Open Watcom (wmake) for DOS builds
-- make
+- GCC or Clang (Linux/macOS) or Open Watcom (wmake, DOS)
+- GNU make
+- Optional: `xt` DOS emulator (for running and testing .EXE files on host)
 
-Build (host):
-
-```sh
-make        # builds oc and olink, installs libs to lib/
-make test   # build + run tests
-```
-
-Build (DOS Open Watcom):
+Build:
 
 ```sh
-make oc-dos    # runs wmake -f src/Makefile.wat
+make            # build oc and olink, compile and install all libraries to lib/
+make test       # full clean + rebuild + run all 715 tests
 ```
 
-Basic usage
------------
+Build for DOS (Open Watcom):
+
+```sh
+make oc-dos     # runs wmake -f src/Makefile.wat (large model -ml)
+```
+
 Compile a module:
 
 ```sh
-oc MyMod.Mod   # -> MyMod.om
+OBERON_LIB=lib ./src/oc Hello.Mod        # produces Hello.om
 ```
 
-Create an executable (compile with entry and link):
+Compile with entry point and link to executable:
 
 ```sh
-set OBERON_LIB=C:\oc\lib
-oc -entry Run MyMod.Mod
-olink MyMod.om SYSTEM.om myapp.exe
+OBERON_LIB=lib ./src/oc -entry RunAllTests Hello.Mod
+./src/olink Hello.om lib/Out.om lib/SYSTEM.om hello.exe
 ```
 
-Packaging hand-written .rdf
----------------------------
-Include extra `.rdf` in a `.om` by adding a system comment in a tiny wrapper module:
+Run under the xt emulator (Linux/macOS):
+
+```sh
+xt run --max=5000000 hello.exe
+```
+
+Packaging hand-written assembler code
+--------------------------------------
+The recommended way to include a hand-assembled `.rdf` in a library archive is via the `$L` directive in a wrapper module:
 
 ```oberon
 MODULE MyLibPack;
-
+PROCEDURE Add*(a, b: INTEGER): INTEGER; NEAR; EXTERNAL;
 (*$L MYLIB.RDF*)
-
 END MyLibPack.
 ```
 
-Then run `oc MyLibPack.Mod` to produce `MyLibPack.om`.
+```sh
+./src/oc MyLibPack.Mod   (* -> MyLibPack.om containing MYLIB.RDF *)
+```
+
+Calling convention summary
+---------------------------
+| Proc type     | Epilogue | First param | Proc-var size |
+|---------------|----------|-------------|---------------|
+| FAR (exported)| RETF     | [BP+6]      | 4 bytes       |
+| NEAR internal | RET      | [BP+4]      | 2 bytes       |
+| NEAR nested   | RET      | [BP+6]      | 2 bytes (SL at [BP+4]) |
+
+VAR parameters pass a 4-byte far address; open-array formals use a 6-byte slot {offset, segment, LEN}.
+
+Memory model summary
+---------------------
+DOS real-mode large model: CS≠DS≠SS. The linker places all modules' data in one combined DS, code groups in their own CS paragraphs, and the stack in a separate SS. `SYSTEM.ADR` returns a full far ADDRESS (segment:offset) for any variable form; locals use SS, globals use DS.
+
+Test suite
+----------
+715 tests across 8 suites:
+
+| Suite                       | Count | What it covers |
+|-----------------------------|-------|----------------|
+| test_scanner.c (unit)       | 94    | Tokens, keywords, literals, comments |
+| test_symbols.c (unit)       | 54    | Scopes, types, BP offsets, arg sizes |
+| test_codegen.c (unit)       | 123   | Exact byte sequences for every codegen path |
+| test_rdoff.c (unit)         | 76    | RDOFF2 binary format (IMPORT/GLOBAL/RELOC) |
+| test_tar.c (unit)           | 26    | ustar archive writer |
+| test_def.c (unit)           | 28    | .def writer / reader round-trip |
+| test_src.sh (integration)   | 288   | Compile, link, RDOFF structure, error messages |
+| test_system_intrinsics.sh   | 26    | SYSTEM intrinsic runtime behaviour |
+
+Executable integration tests (sections 17–55 in test_src.sh) compile Oberon modules with `-entry RunAllTests`, link them, and run them under `xt`. If `xt` is not in PATH those tests are skipped (not failed).
 
 Documentation
 -------------
-- Manual: MANUAL.MD (programmer manual, dialect + ABI)
-- Grammar: docs/oberon07.ebnf (authoritative)
-- Implementation rules and ABI: docs/implementation-rules.md
-- Linker design and output: docs/olink.md
-- RDOFF2 spec: docs/rdoff2-spec.md
+- `MANUAL.MD` — programmer manual: dialect, ABI, calling conventions, open arrays, assembler workflow
+- `docs/oberon07.ebnf` — authoritative grammar (kept in sync with scanner.c / parser.c)
+- `docs/oberon-language.md` — type sizes, ABI, naming, FAR/NEAR, module init
+- `docs/implementation-rules.md` — C89 rules, 16-bit portability, DOS memory constraints
+- `docs/build.md` — detailed build instructions
+- `docs/olink.md` — linker design, input formats, relocation, MZ layout
+- `docs/tests.md` — all test information: how to run, add, and interpret tests
+- `docs/rdoff2-spec.md` — RDOFF2 format specification
 
 License
 -------
-Public domain. See LICENSE.TXT in the repository root.
+Public domain. See LICENSE.TXT.

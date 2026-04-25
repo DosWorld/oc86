@@ -156,6 +156,7 @@ int main(int argc, char **argv) {
         Scanner s;
         memset(&s, 0, sizeof(s));
         s.on_syscomment = parser_syscomment;
+        parser_entry_proc = entry_proc;
         scanner_open(&s, src_file);
         parse_module(&s);
         scanner_close(&s);
@@ -164,19 +165,12 @@ int main(int argc, char **argv) {
     if (parser_errors > 0) { cg_free(); return 1; }
 
     if (entry_proc) {
-        const char *base = path_basename(src_file);
-        char mod_name[64];
+        const char *mod_name = parser_mod_name;
         char lib_name[68];
-        char *dot;
         size_t rdf_len, def_len, main_len;
         uint8_t *rdf_buf, *def_buf, *main_buf;
         FILE *f;
         FILE *lf;
-
-        strncpy(mod_name, base, sizeof(mod_name)-1);
-        mod_name[sizeof(mod_name)-1] = '\0';
-        dot = strrchr(mod_name, '.');
-        if (dot) *dot = '\0';
 
         gen_entry_stub(mod_name, entry_proc, "MAIN.RDF");
 
@@ -216,6 +210,15 @@ int main(int argc, char **argv) {
                 fclose(f);
             }
 
+            if (!rdf_buf || !def_buf || !main_buf) {
+                fprintf(stderr, "oc: -entry: missing %s in %s (cannot rewrite .om)\n",
+                        !rdf_buf ? rdf_name : (!def_buf ? def_name : "MAIN.RDF"),
+                        lib_name);
+                free(rdf_buf); free(def_buf); free(main_buf);
+                remove("MAIN.RDF");
+                cg_free();
+                return 1;
+            }
             /* Rewrite lib with _main.rdf prepended; all names uppercase */
             lf = fopen(lib_name, "wb");
             if (lf) {
@@ -223,9 +226,17 @@ int main(int argc, char **argv) {
                 str_upcase(up_rdf, (int)sizeof(up_rdf), rdf_name);
                 str_upcase(up_def, (int)sizeof(up_def), def_name);
                 tar_begin(lf);
-                if (main_buf) tar_add_file(lf, "MAIN.RDF",  main_buf, main_len);
-                if (rdf_buf)  tar_add_file(lf, up_rdf,     rdf_buf,  rdf_len);
-                if (def_buf)  tar_add_file(lf, up_def,     def_buf,  def_len);
+                tar_add_file(lf, "MAIN.RDF", main_buf, main_len);
+                tar_add_file(lf, up_rdf,    rdf_buf,  rdf_len);
+                tar_add_file(lf, up_def,    def_buf,  def_len);
+                if (parser_stack_size > 0) {
+                    char stack_txt[32];
+                    int stack_txt_len;
+                    stack_txt_len = snprintf(stack_txt, sizeof(stack_txt),
+                                            "%ld\n", parser_stack_size);
+                    tar_add_file(lf, "META-INF/STACK.TXT",
+                                 (uint8_t*)stack_txt, (size_t)stack_txt_len);
+                }
                 tar_end(lf);
                 fclose(lf);
             }

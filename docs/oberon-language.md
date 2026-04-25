@@ -920,6 +920,7 @@ Built into compiler — NOT in SYSTEM.def, NOT linked externally.
 | `SYSTEM.SEG(v)` | INTEGER | Segment of v; `SEG(n^)` = segment of pointer `n` |
 | `SYSTEM.OFS(v)` | INTEGER | Offset of v; `OFS(n^)` = offset of pointer `n` |
 | `SYSTEM.LSL(x, n)` | INTEGER | Logical shift left |
+| `SYSTEM.LSR(x, n)` | INTEGER | Logical shift right |
 | `SYSTEM.ASR(x, n)` | INTEGER | Arithmetic shift right |
 | `SYSTEM.ROR(x, n)` | INTEGER | Rotate right |
 
@@ -974,7 +975,7 @@ Notes:
 - `GET`/`PUT`: `26 8B 07` / `26 89 07`
 - `MOVE`/`FILL`: `8C DA / 8E C2 / FC / F3 A4` (or `F3 AA`)
 - **CLD always** before REP MOVSB/STOSB (direction flag may be set)
-- `LSL/ASR/ROR`: inline 8086 shifts, no function call.
+- `LSL/LSR/ASR/ROR`: inline 8086 shifts, no function call.
   Shift-by-1: `D1` form. Shift-by-N (N≥2): `MOV CL,N` then CL form.
   Variable: `MOV CL,AL / AND CL,0Fh` then CL form.
 
@@ -982,7 +983,7 @@ Notes:
 ```c
 SP_ADR=12  SP_VAL=13  SP_GET=14  SP_PUT=15  SP_MOVE=16
 SP_PTR=17  SP_SEG=18  SP_OFS=19  SP_FILL=20
-SP_LSL=21  SP_ASR=22  SP_ROR=23
+SP_LSL=21  SP_ASR=22  SP_ROR=23  SP_LSR=24
 ```
 
 ---
@@ -1046,6 +1047,7 @@ CALL FAR ModName_ProcName   ; seg 6
 CALL FAR SYSTEM_DONE        ; seg 4
 ```
 Exports GLOBAL `start` at offset 0. Compiler never emits `INT 20h` — DOS exit is `SYSTEM_DONE`'s job.
+If ProcName does not exists into module File.mod -> compiler must produce error and stop.
 
 ---
 

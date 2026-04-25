@@ -11,6 +11,42 @@
 /* forward declaration — parse_system_intrinsic is defined after parse_factor */
 static void parse_system_intrinsic(Item *item, int id);
 
+/* Return 1 if item is a compile-time integer constant (INTEGER or LONGINT). */
+static int is_int_const(const Item *item) {
+    return item->mode == M_CONST && item->type &&
+           (item->type->form == TF_INTEGER || item->type->form == TF_LONGINT);
+}
+
+/* Oberon-07 floor division: result is floor(a/b). */
+static int32_t const_div(int32_t a, int32_t b) {
+    int32_t q = a / b;
+    if ((a ^ b) < 0 && q * b != a) q--;  /* adjust toward -inf */
+    return q;
+}
+
+/* Oberon-07 floor modulus: a - b * floor(a/b). */
+static int32_t const_mod(int32_t a, int32_t b) {
+    int32_t r = a % b;
+    if (r != 0 && (r ^ b) < 0) r += b;  /* adjust sign to match b */
+    return r;
+}
+
+/* Fold two integer constants with op into *item (item is LHS, already filled). */
+static void const_fold_int(Item *item, Token op, const Item *rhs) {
+    int is_long = (item->type->form == TF_LONGINT || rhs->type->form == TF_LONGINT);
+    int32_t a = item->val, b = rhs->val;
+    switch (op) {
+    case T_PLUS:  item->val = a + b; break;
+    case T_MINUS: item->val = a - b; break;
+    case T_STAR:  item->val = a * b; break;
+    case T_DIV:   item->val = const_div(a, b); break;
+    case T_MOD:   item->val = const_mod(a, b); break;
+    default: return;
+    }
+    item->type = is_long ? type_longint : type_integer;
+    item->mode = M_CONST;
+}
+
 /* ================================================================
    DESIGNATOR
    ================================================================ */
@@ -883,6 +919,37 @@ static void parse_term(Item *item) {
     while (pe_sc->sym==T_STAR || pe_sc->sym==T_DIV ||
            pe_sc->sym==T_MOD  || pe_sc->sym==T_AND || pe_sc->sym==T_SLASH) {
         Token op = pe_sc->sym; scanner_next(pe_sc);
+        /* Constant folding: when both operands are compile-time integer constants. */
+        if (is_int_const(item) && (op == T_STAR || op == T_DIV || op == T_MOD)) {
+            parse_factor(&rhs);
+            if (is_int_const(&rhs)) {
+                const_fold_int(item, op, &rhs);
+                continue;
+            }
+            /* RHS not constant: RHS was just computed (may be in AX/DX:AX already).
+               We must push LHS first (deepest on stack), then have RHS in AX/DX:AX.
+               But cg_load_item(item) for LHS const clobbers AX. Fix: save RHS in
+               scratch regs, load+push LHS, restore RHS. */
+            is_long = (item->type && item->type->form == TF_LONGINT);
+            cg_load_item(&rhs);
+            if (is_long) {
+                /* DX:AX = RHS. Save to BX:CX, load+push LHS, restore DX:AX=RHS. */
+                cg_emit2(0x8B, 0xC8); /* MOV CX,AX  (rhs_lo → CX) */
+                cg_emit2(0x8B, 0xDA); /* MOV BX,DX  (rhs_hi → BX) */
+                cg_load_item(item);   /* DX:AX = LHS const */
+                cg_push_dxax();       /* push LHS */
+                cg_emit2(0x8B, 0xC1); /* MOV AX,CX  (rhs_lo → AX) */
+                cg_emit2(0x8B, 0xD3); /* MOV DX,BX  (rhs_hi → DX) */
+            } else {
+                cg_emit1(OP_PUSH_AX);   /* push RHS */
+                cg_load_item(item);     /* AX = LHS const */
+                /* swap: stack=[RHS], AX=LHS → stack=[LHS], AX=RHS */
+                cg_emit1(OP_POP_CX);        /* CX = RHS */
+                cg_emit1(OP_PUSH_AX);       /* push LHS */
+                cg_emit2(0x8B, 0xC1);       /* MOV AX, CX (AX=RHS) */
+            }
+            goto term_rhs_loaded;
+        }
         cg_load_item(item);
         is_fpu  = (item->type && (item->type->form == TF_REAL ||
                                    item->type->form == TF_LONGREAL));
@@ -924,6 +991,7 @@ static void parse_term(Item *item) {
             cg_emit1(OP_PUSH_AX);   /* save 16-bit LHS */
         }
         parse_factor(&rhs); cg_load_item(&rhs);
+        term_rhs_loaded:;
         /* Implicit coercion: integer LHS, REAL/LONGREAL RHS → promote both to FPU */
         if (is_fpu_type(&rhs)) {
             /* RHS is now in ST(0).  Recover integer LHS from CPU stack into AX/DX:AX. */
@@ -1049,6 +1117,37 @@ static void parse_simple_expr(Item *item) {
     }
     while (pe_sc->sym==T_PLUS || pe_sc->sym==T_MINUS || pe_sc->sym==T_OR) {
         Token op = pe_sc->sym; scanner_next(pe_sc);
+        /* Constant folding: when both operands are compile-time integer constants. */
+        if (is_int_const(item) && (op == T_PLUS || op == T_MINUS)) {
+            parse_term(&rhs);
+            if (is_int_const(&rhs)) {
+                const_fold_int(item, op, &rhs);
+                continue;
+            }
+            /* RHS not constant: RHS was just computed (may be in AX/DX:AX already).
+               We must push LHS first (deepest on stack), then have RHS in AX/DX:AX.
+               But cg_load_item(item) for LHS const clobbers AX. Fix: save RHS in
+               scratch regs, load+push LHS, restore RHS. */
+            is_long = (item->type && item->type->form == TF_LONGINT);
+            cg_load_item(&rhs);
+            if (is_long) {
+                /* DX:AX = RHS. Save to BX:CX, load+push LHS, restore DX:AX=RHS. */
+                cg_emit2(0x8B, 0xC8); /* MOV CX,AX  (rhs_lo → CX) */
+                cg_emit2(0x8B, 0xDA); /* MOV BX,DX  (rhs_hi → BX) */
+                cg_load_item(item);   /* DX:AX = LHS const */
+                cg_push_dxax();       /* push LHS */
+                cg_emit2(0x8B, 0xC1); /* MOV AX,CX  (rhs_lo → AX) */
+                cg_emit2(0x8B, 0xD3); /* MOV DX,BX  (rhs_hi → DX) */
+            } else {
+                cg_emit1(OP_PUSH_AX);   /* push RHS */
+                cg_load_item(item);     /* AX = LHS const */
+                /* swap: stack=[RHS], AX=LHS → stack=[LHS], AX=RHS */
+                cg_emit1(OP_POP_CX);        /* CX = RHS */
+                cg_emit1(OP_PUSH_AX);       /* push LHS */
+                cg_emit2(0x8B, 0xC1);       /* MOV AX, CX (AX=RHS) */
+            }
+            goto sexpr_rhs_loaded;
+        }
         cg_load_item(item);
         is_fpu  = (item->type && (item->type->form == TF_REAL ||
                                    item->type->form == TF_LONGREAL));
@@ -1092,6 +1191,7 @@ static void parse_simple_expr(Item *item) {
             cg_emit1(OP_PUSH_AX);   /* save 16-bit LHS */
         }
         parse_term(&rhs); cg_load_item(&rhs);
+        sexpr_rhs_loaded:;
         /* Implicit coercion: integer LHS, REAL/LONGREAL RHS → promote both to FPU */
         if (is_fpu_type(&rhs)) {
             if (is_long) {

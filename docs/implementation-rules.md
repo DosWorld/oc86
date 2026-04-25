@@ -220,6 +220,7 @@ register** — callee-clobbered — so it must always be set explicitly from DX.
 - `symbols.h` TF_REAL=14, TF_LONGREAL=15, SZ_REAL=4, SZ_LONGREAL=8 added
 - `codegen.h` M_FREG=7 item mode added; all FPU helpers declared
 - `src/Makefile.wat` uses `-ml` (large model) matching `src/Makefile` comment
+- `compat.c` `str_upcase`, `olink.c` `str_upper`/`str_ends_with` — replaced locale-dependent `toupper` with ASCII-only `ascii_upper` helper; removed `#include <ctype.h>` from both files
 
 **Still open (tracked):** none — all known issues fixed.
 

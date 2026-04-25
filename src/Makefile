@@ -19,8 +19,8 @@ all: $(TARGET) $(OLINK)
 $(TARGET): $(OBJS)
 	$(CC) $(CFLAGS) -o $@ $^
 
-$(OLINK): olink.c compat.c
-	$(CC) $(CFLAGS) -o $@ olink.c compat.c
+$(OLINK): olink.c compat.c tar.c
+	$(CC) $(CFLAGS) -o $@ olink.c compat.c tar.c
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c -o $@ $<

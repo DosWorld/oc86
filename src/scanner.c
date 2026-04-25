@@ -148,13 +148,15 @@ static int hexval(int c) {
 }
 
 static void scan_number(SC *sc) {
-    char buf[64]; int n=0, has_hex=0;
+    char buf[64]; int n=0, has_hex=0, overflow=0;
     while (ishex(sc->ch)) {
         if (sc->ch>='A') has_hex=1;
         if (n<63) buf[n++]=sc->ch;
+        else overflow=1;
         readch(sc);
     }
     buf[n]='\0';
+    if (overflow) { scan_error(sc,"numeric literal too long"); return; }
     if (sc->ch == 'H') {            /* hex integer */
         uint32_t v=0; int i;
         readch(sc);

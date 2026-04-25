@@ -46,7 +46,11 @@ syscomment  = "(*$" directive "*)"
             | "//$" directive newline .
 
 directive   = "L" filepath    (* $L<path> — include <path>.rdf in the output .om,
-                                  equivalent to passing -rdf <path> on the command line *) .
+                                  equivalent to passing -rdf <path> on the command line *)
+            | "M" integer   (* $M <size> — stack size hint (positive decimal LONGINT).
+                                  Stored as META-INF/STACK.TXT in the .om when compiled
+                                  with -entry.  Multiple $M directives: last one wins.
+                                  Ignored (no file written) when compiling without -entry. *) .
 
 (* Keywords (all uppercase, not valid identifiers) *)
 keyword     = "ARRAY" | "BEGIN" | "BY" | "CASE" | "CONST" | "DIV" | "DO"

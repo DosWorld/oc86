@@ -1,5 +1,6 @@
 #include "codegen.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <assert.h>
 
@@ -18,7 +19,16 @@ void cg_emitd(uint32_t d) { cg_emitw((uint16_t)(d & 0xFFFF)); cg_emitw((uint16_t
 
 void cg_emit_data_byte(uint8_t b)   { emit_byte(&cg_obj, SEG_DATA, b); }
 void cg_emit_data_word(uint16_t w)  { emit_word(&cg_obj, SEG_DATA, w); }
-void cg_emit_data_zero(uint16_t n)  { uint16_t i; for(i=0;i<n;i++) emit_byte(&cg_obj,SEG_DATA,0); }
+/* Bulk zero fill: single bounds check + memset (was N emit_byte calls). */
+void cg_emit_data_zero(uint16_t n) {
+    if (n == 0) return;
+    if ((uint32_t)cg_obj.data_len + (uint32_t)n > SEG_LIMIT) {
+        fprintf(stderr, "error: data segment exceeds %u bytes\n", (unsigned)SEG_LIMIT);
+        exit(1);
+    }
+    memset(cg_obj.data + cg_obj.data_len, 0, n);
+    cg_obj.data_len += n;
+}
 void cg_emit_data_string(const char *s) {
     while (*s) emit_byte(&cg_obj, SEG_DATA, (uint8_t)*s++);
     emit_byte(&cg_obj, SEG_DATA, 0);
@@ -313,11 +323,8 @@ void cg_sl_load_long_ax(int hops, int32_t ofs) {
 }
 
 void cg_sl_store_long_ax(int hops, int32_t ofs) {
-    cg_emit1(0x52);              /* PUSH DX */
-    cg_emit1(OP_PUSH_AX);       /* PUSH AX */
-    cg_sl_load_bx(hops);        /* BX = outer BP (clobbers BX) */
-    cg_emit1(OP_POP_AX);        /* POP AX  (restore lo word) */
-    cg_emit1(0x5A);             /* POP DX  (restore hi word) */
+    /* cg_sl_load_bx clobbers only BX, not AX/DX — no save/restore needed */
+    cg_sl_load_bx(hops);        /* BX = outer BP */
     sl_store_word_bx(ofs,     0x00); /* MOV SS:[BX+ofs],   AX */
     sl_store_word_bx(ofs + 2, 0x10); /* MOV SS:[BX+ofs+2], DX */
 }

@@ -92,6 +92,9 @@ correct byte sequences, symbol exports, file structure, and error behaviour.
 | Array dim constants | `ARRAY N OF T` and `ARRAY ROWS, COLS OF T` accept named INTEGER constants as dimensions; non-integer constants rejected (Section 47) |
 | `FLOAT`/`ENTIER` synonyms | `FLOAT(x)` compiles identically to `REAL(x)`; `ENTIER(x)` compiles identically to `FLOOR(x)`; FILD/FSTCW byte patterns verified (Section 48) |
 | Implicit int→REAL coercion | `r * n`, `n + r`, `r < 0`, `r = 0` etc. compile and emit FILD word (DF 07) for the integer operand; both orderings and all four operator groups covered (Section 49) |
+| Filename vs module name | Filename (e.g. `testhello.mod`) used for file open only; output names and RDOFF symbols use module name from `MODULE` keyword (`parser_mod_name`). `-entry` stub imports correct name even with lowercase filename. (Section 53) |
+| `$M` stack-size directive | `(*$M size*)` / `//$M size` sets `parser_stack_size`; with `-entry` writes `META-INF/STACK.TXT` (plain decimal) into `.om`; without `-entry` no file written; multiple `$M` last wins; invalid value (`0`) warns on stderr and omits file. (Section 54) |
+| olink stack size override | `olink` reads `META-INF/STACK.TXT` from entry `.om` after smart-link; sets `LinkerState.stack_size`; MZ SP field = `stack_size - 2`; invalid/missing → default `STACK_SIZE=8192`. MZ header verified by parsing SP at byte offset 16. (Section 55) |
 
 ---
 
@@ -282,6 +285,8 @@ for all combinations tested by the byte-level section 37 tests.
 
 **TestHello.mod** (section 51): Command-line argument printing — `RunAllTests` iterates `Dos.ARGCOUNT()` args starting at index 1 (skipping the empty argv[0] slot), printing each separated by a space and terminated with a newline. Run with `xt run testhello.exe hello world`; expected stdout is `hello world`. Tests `Dos.ARGCOUNT()` and `Dos.ARG()` at runtime with the `xt` emulator passing real command-line arguments.
 
+**TestConstExpr.Mod** (section 52): Constant expression evaluation — verifies that arithmetic in `CONST` declarations is folded at compile time. Covers: `+`, `-`, `*`, `DIV`, `MOD` on literal integers and named constants; parenthesised sub-expressions `(A+B)*2`; operator precedence `A+B*2`; Oberon-07 floor-division semantics (`(-7) DIV 2 = -4`); unary-minus precedence (`-7 DIV 2 = -(7 DIV 2) = -3`); LONGINT promotion when result exceeds 16-bit (`1000*200 = 200000`). 15 checks. Compile-level checks (section 52a–52f): `+`/`-`/`*`/`DIV`/`MOD`, parentheses, negative operands, large products, chained constants, computed constant as array dimension. 6 checks.
+
 ---
 
 ## xt emulator reference
@@ -332,7 +337,7 @@ Add to the relevant `test_xxx.c`. Follow the existing pattern: setup, call funct
 ### New executable test (preferred path)
 
 Write a `TestXxx.Mod` in `tests/` with `PROCEDURE RunAllTests*` that runs subtests and prints
-`Failed: N` at the end. Add it as section 45+N in the xt block of `test_src.sh` following the
+`Failed: N` at the end. Add it as the next numbered section (currently 56+) in the xt block of `test_src.sh` following the
 template below. Add a row to the executable tests table and a description paragraph in
 "What each executable test covers."
 

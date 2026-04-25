@@ -134,7 +134,9 @@ static TypeDesc *resolve_type_name(const char *tname) {
     /* Search current scope for a K_TYPE symbol */
     s = sym_find(tname);
     if (s && s->kind == K_TYPE) return s->type;
-    return type_integer; /* fallback */
+    /* Unknown type name: warn (likely renamed/stale .def) and fall back to INTEGER. */
+    fprintf(stderr, "warning: unknown type '%s' in .def, defaulting to INTEGER\n", tname);
+    return type_integer;
 }
 
 /* Parse a type token from the .def extended format.

@@ -127,6 +127,8 @@ void emit_word(ObjFile *o, int seg, uint16_t w) {
 static void w16(FILE *f, uint16_t v) { uint8_t b[2]; b[0]=v&0xFF; b[1]=(v>>8)&0xFF; fwrite(b,1,2,f); }
 static void w32(FILE *f, uint32_t v) { uint8_t b[4]; b[0]=v&0xFF; b[1]=(v>>8)&0xFF; b[2]=(v>>16)&0xFF; b[3]=(v>>24)&0xFF; fwrite(b,1,4,f); }
 
+#define RDF_HDR_BUF_SZ 65000u
+
 void rdf_write(ObjFile *obj, FILE *f) {
     /* --- build header records into a heap buffer --- */
     uint8_t *hdr;
@@ -136,16 +138,20 @@ void rdf_write(ObjFile *obj, FILE *f) {
     Global *g;
     uint32_t mod_size;
 
-    hdr = (uint8_t *)malloc(65000);
+    hdr = (uint8_t *)malloc(RDF_HDR_BUF_SZ);
     if (!hdr) { fprintf(stderr, "rdf_write: out of memory\n"); exit(1); }
 
+#define HNEED(n) do { if (hlen + (uint32_t)(n) > RDF_HDR_BUF_SZ) { \
+    fprintf(stderr, "rdf_write: header buffer overflow (>%lu bytes)\n", \
+            (unsigned long)RDF_HDR_BUF_SZ); free(hdr); exit(1); } } while (0)
 #define H1(b)   hdr[hlen++] = (uint8_t)(b)
 #define H2(w)   H1((w)&0xFF); H1(((w)>>8)&0xFF)
 #define H4(d)   H2((d)&0xFFFF); H2(((d)>>16)&0xFFFF)
 #define HSTR(s) { const char*_p=(s); while(*_p) hdr[hlen++]=(uint8_t)*_p++; hdr[hlen++]=0; }
 
-    /* RELOC / SEGRELOC records */
+    /* RELOC / SEGRELOC records — 10 bytes each (type,len,seg,ofs4,width,rseg2) */
     for (r = obj->reloc_head; r; r = r->next) {
+        HNEED(10);
         if (r->phys_seg & 0x80) {
             /* SEGRELOC (type 6): same layout as RELOC but different type byte */
             H1(REC_SEGRELOC); H1(8);
@@ -162,18 +168,20 @@ void rdf_write(ObjFile *obj, FILE *f) {
         }
     }
 
-    /* IMPORT records */
+    /* IMPORT records — 5 bytes fixed + name + NUL */
     for (imp = obj->import_head; imp; imp = imp->next) {
         int nlen = (int)strlen(imp->name) + 1;
+        HNEED(5 + nlen);
         H1(REC_IMPORT); H1(3 + nlen);  /* flags(1)+segid(2)+name */
         H1(imp->flags);
         H2(imp->seg_id);               /* 2 bytes for import! */
         HSTR(imp->name);
     }
 
-    /* GLOBAL records */
+    /* GLOBAL records — 8 bytes fixed + name + NUL */
     for (g = obj->global_head; g; g = g->next) {
         int nlen = (int)strlen(g->name) + 1;
+        HNEED(8 + nlen);
         H1(REC_GLOBAL); H1(6 + nlen);  /* flags(1)+segid(1)+offset(4)+name */
         H1(g->flags);
         H1(g->seg_id);                 /* 1 byte for global! */
@@ -183,10 +191,12 @@ void rdf_write(ObjFile *obj, FILE *f) {
 
     /* BSS record */
     if (obj->bss_size > 0) {
+        HNEED(6);
         H1(REC_BSS); H1(4);
         H4(obj->bss_size);
     }
 
+#undef HNEED
 #undef H1
 #undef H2
 #undef H4

@@ -13,7 +13,7 @@ TARGET = oc.exe
 OBJS = main.obj scanner.obj symbols.obj codegen.obj rdoff.obj parser.obj pexpr.obj &
        import.obj tar.obj def.obj compat.obj
 
-OLINK_OBJS = olink.obj compat.obj
+OLINK_OBJS = olink.obj compat.obj tar.obj
 
 all: $(TARGET) olink.exe .SYMBOLIC
 
@@ -41,6 +41,7 @@ olink.exe: $(OLINK_OBJS)
     @%append olink.lnk name olink.exe
     @%append olink.lnk file olink.obj
     @%append olink.lnk file compat.obj
+    @%append olink.lnk file tar.obj
     @%append olink.lnk option stack=50000
     $(LD) @olink.lnk
 

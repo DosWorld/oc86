@@ -59,7 +59,12 @@ FILE *find_import_file(const char *filename, char *found_path, int path_sz) {
     strncpy(libname, filename, sizeof(libname) - 1);
     libname[sizeof(libname) - 1] = '\0';
     dot = strrchr(libname, '.');
-    if (dot) strcpy(dot, ".om");
+    if (dot) {
+        /* ".om" is 3 chars; check we have room before the terminator */
+        if (dot - libname + 4 > (int)sizeof(libname))
+            return NULL; /* filename too long to form .om name */
+        memcpy(dot, ".om", 4);
+    }
 
     /* 1. current directory */
     f = try_open_def(NULL, filename, libname, found_path, path_sz);
