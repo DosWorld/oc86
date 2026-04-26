@@ -119,9 +119,9 @@ DOS memory model (brief): real-mode 16-bit segmented addressing (segment:offset)
 | `Out87`  | `Real`, `LongReal` | FPU-based float formatting; links `Out` |
 | `In`     | `Int`, `String` | Stdin reading |
 | `Strings`| `Length`, `Pos`, `Append`, `Insert`, `Delete`, `Replace`, `Extract`, `Equal`, `Copy` | Null-terminated ARRAY OF CHAR operations |
-| `Files`  | `File`, `Rider`, `Old`, `New`, `Register`, `Close`, `Set`, `BlockRead`, `BlockWrite`, `Read`, `Write`, `Pos` | DOS file I/O |
+| `Files`  | `File`, `Reset`, `ReWrite`, ``, `Close`, `Seek`, `BlockRead`, `BlockWrite`, `Position` | DOS file I/O |
 | `Crt`    | cursor, clear, colour | DOS INT 10h terminal control |
-| `Dos`    | `ARGCOUNT`, `ARG`, `GetEnv`, `GetPsp`, `Intr`, `MsDos` | Command-line args, environment, DOS calls |
+| `Dos`    | `ParamCount`, `ParamStr`, `GetEnv`, `GetPsp`, `Intr`, `MsDos` | Command-line args, environment, DOS calls |
 | `IO`     | `Rider`, `StdOut`, `StdErr`, `ReadChar`, `WriteChar`, `WriteStr`, `WriteInt` | Raw byte I/O to DOS handles; own Rider type (not Files.Rider) |
 | `Mem`    | `Block`, `Alloc`, `Free` | Heap allocator; guards against >65000-byte allocations |
 
