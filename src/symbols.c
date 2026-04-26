@@ -7,6 +7,7 @@ TypeDesc *type_integer, *type_boolean, *type_char,
          *type_byte, *type_set, *type_niltype, *type_notype,
          *type_address, *type_longint, *type_real, *type_longreal;
 Scope    *top_scope, *universe;
+int       next_tag_id = 1;  /* 0 reserved; each record type gets a unique ID */
 
 /* ---- allocators ---- */
 static TypeDesc *talloc(void) {
@@ -35,13 +36,14 @@ TypeDesc *type_new_array(TypeDesc *elem, int32_t len) {
 
 TypeDesc *type_new_record(TypeDesc *base) {
     TypeDesc *t = type_new(TF_RECORD, 0);
-    t->base = base;
+    t->base   = base;
+    t->tag_id = next_tag_id++;
     if (base) {
         t->size    = base->size;
-        t->tag_ofs = base->tag_ofs;
+        t->tag_ofs = -1;
     } else {
-        t->tag_ofs = 0;
-        t->size    = 0;   /* fields start at offset 0; type-tag not emitted */
+        t->tag_ofs = -1;
+        t->size    = 0;  /* fields start at offset 0; tag is before the object */
     }
     return t;
 }
@@ -310,6 +312,9 @@ void sym_init(void) {
     predef_sysproc("LSR",  SP_LSR);
     predef_sysproc("ASR",  SP_ASR);
     predef_sysproc("ROR",  SP_ROR);
+    predef_sysproc("AND",  SP_AND);
+    predef_sysproc("IOR",  SP_IOR);
+    predef_sysproc("XOR",  SP_XOR);
 
     /* SYSTEM: always implicitly available (never listed in IMPORT).
        Pre-declared in universe so SYSTEM.Foo qualified access works. */

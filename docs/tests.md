@@ -41,7 +41,7 @@ Executable tests catch real runtime bugs, survive code-generator refactors witho
 - `test_codegen.c` checks exact byte sequences — any codegen change must update the expected bytes.
 - `test_rdoff.c` checks IMPORT has 2-byte seg_id and GLOBAL has 1-byte seg_id — do not mix them.
 - Any new language feature needs at least one entry in `test_src.sh`.
-- Any new `.def` format change requires SYSTEM.DEF round-trip test to pass (see `docs/implementation-rules.md`).
+- Any new `.def` format change requires `test_def.c` round-trips to pass and SYSTEM library to build without warnings (see `docs/implementation-rules.md` for canonical format).
 
 ---
 
@@ -54,7 +54,7 @@ Executable tests catch real runtime bugs, survive code-generator refactors witho
 | `tests/test_codegen.c` | Exact byte sequences: prologue/epilogue (NEAR and FAR), load_imm/bp/mem, **byte load/store (CHAR/BYTE) for locals and globals** (MOV AL/[addr] + XOR AH,AH), far-ptr helpers (LES/ES:/DX:AX), arithmetic, inc/dec/cmp, setcc, 8086-safe jumps (cond_near, jmp_back, cond_back), NEAR and FAR calls with RELOC, invert_jcc |
 | `tests/test_rdoff.c` | RDOFF2 binary: signature, file size, header size, **IMPORT seg_id = 2 bytes**, **GLOBAL seg_id = 1 byte**, RELOC/SEGRELOC layout, BSS record, code/data segment headers, EOF marker, record ordering |
 | `tests/test_tar.c` | ustar header: magic, typeflag, name, size field (octal), checksum, data placement, padding to 512-byte boundary, two-block EOF, two-file archive, system tar validation |
-| `tests/test_def.c` | def_write: MODULE line, CONST/VAR/TYPE/PROC lines (always FAR/NEAR format), non-exported symbols excluded; def_read: round-trip restores all fields; empty module; multi-symbol modules |
+| `tests/test_def.c` | def_write: CONST→TYPE→VAR→PROC order verified; root TYPE before extended TYPE (BASE before derived); RECORD with exported fields; RECORD extension with `BASE` line; `POINTER <name>` emits named base type; REAL/LONGREAL/SET field types; non-exported symbols excluded. def_read: full round-trip; deferred BASE resolution via linked list (`BasePatchNode`); FIELD parsing with multi-token types (`POINTER name`); REAL/LONGREAL resolve as primitive base types (no scope lookup); cross-module record extension; imported type as pointer base; FORWARD proc round-trip; PROC with REAL/LONGREAL params. |
 
 ---
 
@@ -95,6 +95,9 @@ correct byte sequences, symbol exports, file structure, and error behaviour.
 | Filename vs module name | Filename (e.g. `testhello.mod`) used for file open only; output names and RDOFF symbols use module name from `MODULE` keyword (`parser_mod_name`). `-entry` stub imports correct name even with lowercase filename. (Section 53) |
 | `$M` stack-size directive | `(*$M size*)` / `//$M size` sets `parser_stack_size`; with `-entry` writes `META-INF/STACK.TXT` (plain decimal) into `.om`; without `-entry` no file written; multiple `$M` last wins; invalid value (`0`) warns on stderr and omits file. (Section 54) |
 | olink stack size override | `olink` reads `META-INF/STACK.TXT` from entry `.om` after smart-link; sets `LinkerState.stack_size`; MZ SP field = `stack_size - 2`; invalid/missing → default `STACK_SIZE=8192`. MZ header verified by parsing SP at byte offset 16. (Section 55) |
+| `IS` type test | `p IS Base` compiles (static extension → TRUE); `p IS Ext` where `p: POINTER TO Base` compiles (runtime tag check); `p IS B` for unrelated types compiles (folds to FALSE). `TestTypeTag.Mod` executable verifies 7 runtime IS scenarios including cross-type checks. (Section 57) |
+| FORWARD procedures | `PROCEDURE name(params): T; FORWARD;` compiles; body `PROCEDURE name;` resolves and patches all call sites; mutual recursion works; unresolved FORWARD gives error. (Section 58) |
+| `$R` directive | `$R-` (default) — no bounds checks emitted. `$R+` — constant out-of-bounds index (negative or ≥ len) gives compile error; variable index emits runtime check calling `SYSTEM_ErrIndexOutOfBounds` (FAR, no args) on violation, which prints a message and halts. Open-array params use LEN slot at `[BP+adr+4]`. Directive toggles mid-file; `$R-` after `$R+` turns checks off. (Section 59) |
 
 ---
 
@@ -115,6 +118,7 @@ All sections 17–36 are implemented in `test_src.sh` and passing.
 | 20a–d   | TestProcedures.Mod   | RunAllTests  | 50000000   | stdout line `Failed: 0`      |
 | 21a–d   | TestLongint.Mod      | RunAllTests  | 5000000    | stdout line `Failed: 0`      |
 | 22a–d   | TestLongs.Mod        | RunAllTests  | 10000000   | stdout line `Failed: 0`      |
+| 22e–h   | TestBitOps.Mod       | RunAllTests  | 5000000    | stdout line `Failed: 0`      |
 | 23a–d   | TestReals.Mod        | RunAllTests  | 10000000   | stdout line `Failed: 0`      |
 | 24a–d   | TestLongReals.Mod    | RunAllTests  | 10000000   | stdout line `Failed: 0`      |
 | 25a–d   | TestStrings.Mod      | RunAllTests  | 5000000    | stdout line `Failed: 0`      |
@@ -134,6 +138,9 @@ All sections 17–36 are implemented in `test_src.sh` and passing.
 | 45a–d   | TestSysIntrinsics.Mod| RunAllTests  | 5000000    | stdout line `Failed: 0`      |
 | 46a–d   | TestTypelessVar.Mod  | RunAllTests  | 5000000    | stdout line `Failed: 0`      |
 | 51a–d   | TestHello.mod        | RunAllTests  | 5000000    | stdout = `hello world`       |
+| 57d–g   | TestTypeTag.Mod      | RunAllTests  | 5000000    | stdout line `Failed: 0`      |
+| 58d–g   | TestForward.Mod      | RunAllTests  | 5000000    | stdout line `Failed: 0`      |
+| 59g–j   | TestBounds.Mod       | RunAllTests  | 5000000    | stdout line `Failed: 0`      |
 
 ### What each executable test covers
 
@@ -152,6 +159,9 @@ deeply nested procs (3 levels), function composition. Uses `--max=50000000`.
 comparisons, INTEGER↔LONGINT casts, LONGINT arrays, LONGINT in records/heap.
 
 **TestLongs.Mod**: additional LONGINT tests (boundaries, shift ops, bitwise ops, large values).
+
+**TestBitOps.Mod**: SYSTEM.AND, SYSTEM.IOR, SYSTEM.XOR on BYTE, INTEGER, and LONGINT operands.
+Tests both variable and constant arguments, all three result types.
 
 **TestReals.Mod**: REAL (32-bit float) arithmetic, comparisons, REAL(i)/FLOOR(r) conversions,
 static arrays of REAL (1D and 2D via nested ARRAY), REAL in records + alignment,
@@ -285,6 +295,12 @@ for all combinations tested by the byte-level section 37 tests.
 
 **TestHello.mod** (section 51): Command-line argument printing — `RunAllTests` iterates `Dos.ARGCOUNT()` args starting at index 1 (skipping the empty argv[0] slot), printing each separated by a space and terminated with a newline. Run with `xt run testhello.exe hello world`; expected stdout is `hello world`. Tests `Dos.ARGCOUNT()` and `Dos.ARG()` at runtime with the `xt` emulator passing real command-line arguments.
 
+**TestTypeTag.Mod** (section 57): Runtime `IS` type test — 7 runtime checks. Covers: compile-time fold to TRUE when static type extends RHS (`PDog IS Animal`, `PDog IS Dog`); runtime tag check TRUE when pointer holds a subtype (`PAnimal → Dog IS Dog`); runtime tag check FALSE for sibling types (`pa → Dog IS Cat`); runtime tag check FALSE for plain base type (`PAnimal → Animal IS Dog`); runtime TRUE for Cat type (`PAnimal → Cat IS Cat`); runtime FALSE for wrong subtype (`PAnimal → Cat IS Dog`). Uses `Animal`, `Dog` (extends Animal), `Cat` (extends Animal) type hierarchy.
+
+**TestForward.Mod** (section 58): FORWARD procedure declarations — mutual recursion via FORWARD (`Even`/`Odd` with small integer arguments); forward FAR procedure (`Compute`); forward non-exported procedure (`Helper`). 8 runtime checks. Compile-level checks (58a–58c): simple FORWARD compiles; mutual recursion compiles; unresolved FORWARD gives error.
+
+**TestBounds.Mod** (section 59): `$R` directive and array bounds checking. Uses `(*$R+*)`. In-bounds read/write on fixed-size local array; sum via open-array parameter; boundary element write/read; variable index at boundaries. 7 runtime checks. Compile-level checks (59a–59f): `$R-` (default) allows constant out-of-bounds; `$R+` gives compile error for constant ≥ len; `$R+` gives compile error for negative constant; in-bounds constants compile with `$R+`; `$R-` after `$R+` disables check; `$R+` emits `SYSTEM_ErrIndexOutOfBounds` RDOFF import (not `SYSTEM_Halt`). Runtime halt checks (59k–59l): negative variable index halts with non-zero exit under `$R+`; variable index ≥ len halts with non-zero exit under `$R+`.
+
 **TestConstExpr.Mod** (section 52): Constant expression evaluation — verifies that arithmetic in `CONST` declarations is folded at compile time. Covers: `+`, `-`, `*`, `DIV`, `MOD` on literal integers and named constants; parenthesised sub-expressions `(A+B)*2`; operator precedence `A+B*2`; Oberon-07 floor-division semantics (`(-7) DIV 2 = -4`); unary-minus precedence (`-7 DIV 2 = -(7 DIV 2) = -3`); LONGINT promotion when result exceeds 16-bit (`1000*200 = 200000`). 15 checks. Compile-level checks (section 52a–52f): `+`/`-`/`*`/`DIV`/`MOD`, parentheses, negative operands, large products, chained constants, computed constant as array dimension. 6 checks.
 
 ---
@@ -337,7 +353,7 @@ Add to the relevant `test_xxx.c`. Follow the existing pattern: setup, call funct
 ### New executable test (preferred path)
 
 Write a `TestXxx.Mod` in `tests/` with `PROCEDURE RunAllTests*` that runs subtests and prints
-`Failed: N` at the end. Add it as the next numbered section (currently 56+) in the xt block of `test_src.sh` following the
+`Failed: N` at the end. Add it as the next numbered section (currently 60+) in the xt block of `test_src.sh` following the
 template below. Add a row to the executable tests table and a description paragraph in
 "What each executable test covers."
 

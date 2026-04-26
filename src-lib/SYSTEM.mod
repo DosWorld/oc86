@@ -1,3 +1,4 @@
+(*$R-*)
 MODULE SYSTEM;
 
 CONST
@@ -81,6 +82,35 @@ PROCEDURE MOVE*(VAR src, dst; n: INTEGER);
    POP AX=b; POP CX=n; POP DI=dst_ofs; POP ES=dst_seg; CLD; REP STOSB — SP balanced. *)
 PROCEDURE FILL*(VAR dst; n: INTEGER; b: BYTE);
   INLINE(058H,059H,05FH,007H,0FCH,0F3H,0AAH);
+
+PROCEDURE PORTOUT*(port : INTEGER; b: BYTE);
+  INLINE(058H,05AH,0EEH);
+
+PROCEDURE PORTIN*(port : INTEGER) : BYTE;
+  INLINE(05AH,0ECH);
+
+
+PROCEDURE Message(msg : ARRAY OF CHAR);
+VAR
+    r : Registers;
+BEGIN
+    r.DS := SEG(msg);
+    r.DX := OFS(msg);
+    r.AX := 0900H;
+    Intr(21H, r);
+END Message;
+
+PROCEDURE Error(msg : ARRAY OF CHAR);
+BEGIN
+    Message("Run-time error: $");
+    Message(msg);
+    Halt(2)
+END Error;
+
+PROCEDURE ErrIndexOutOfBounds*;
+BEGIN
+    Error("Array index out of bounds$");
+END ErrIndexOutOfBounds;
 
 (*$L SYS.RDF*)
 

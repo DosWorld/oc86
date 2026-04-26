@@ -6,123 +6,184 @@
 
 /* ---- writer ---- */
 
-/* Write a type descriptor as a type-name token for .def PARAM/FIELD lines */
+/* Find the exported symbol name for a TypeDesc in the current (module-level) scope.
+   Used to emit named types (RECORD, POINTER TO SomeRecord) in .def. */
+static const char *find_type_name(TypeDesc *t) {
+    Symbol *sym;
+    for (sym = top_scope->symbols; sym; sym = sym->next) {
+        if (sym->kind == K_TYPE && sym->type == t)
+            return sym->name;
+    }
+    return NULL;
+}
+
+/* Write a type descriptor token for .def PARAM/FIELD/PROC lines.
+   POINTER emits "POINTER <base>" so the base type survives round-trips. */
 static void write_type(FILE *f, TypeDesc *t) {
+    const char *nm;
     if (!t)                           { fprintf(f, "VOID"); return; }
     switch (t->form) {
-    case TF_INTEGER:  fprintf(f, "INTEGER"); return;
-    case TF_BOOLEAN:  fprintf(f, "BOOLEAN"); return;
-    case TF_CHAR:     fprintf(f, "CHAR");    return;
-    case TF_BYTE:     fprintf(f, "BYTE");    return;
-    case TF_LONGINT:  fprintf(f, "LONGINT"); return;
-    case TF_ADDRESS:  fprintf(f, "ADDRESS"); return;
-    case TF_ARRAY:    fprintf(f, "ARRAY");   return;
-    case TF_POINTER:  fprintf(f, "POINTER VOID"); return;
-    case TF_NOTYPE:   fprintf(f, "VOID");    return;
-    default:          fprintf(f, "INTEGER"); return; /* fallback */
+    case TF_INTEGER:  fprintf(f, "INTEGER");  return;
+    case TF_BOOLEAN:  fprintf(f, "BOOLEAN");  return;
+    case TF_CHAR:     fprintf(f, "CHAR");     return;
+    case TF_BYTE:     fprintf(f, "BYTE");     return;
+    case TF_LONGINT:  fprintf(f, "LONGINT");  return;
+    case TF_REAL:     fprintf(f, "REAL");     return;
+    case TF_LONGREAL: fprintf(f, "LONGREAL"); return;
+    case TF_SET:      fprintf(f, "SET");      return;
+    case TF_ADDRESS:  fprintf(f, "ADDRESS");  return;
+    case TF_ARRAY:    fprintf(f, "ARRAY");    return;
+    case TF_NOTYPE:   fprintf(f, "VOID");     return;
+    case TF_POINTER:
+        fprintf(f, "POINTER ");
+        if (t->base) {
+            nm = find_type_name(t->base);
+            if (nm) { fprintf(f, "%s", nm); return; }
+        }
+        fprintf(f, "VOID");
+        return;
+    case TF_RECORD:
+        nm = find_type_name(t);
+        if (nm) { fprintf(f, "%s", nm); return; }
+        fprintf(f, "VOID");
+        return;
+    default:
+        fprintf(f, "INTEGER"); return; /* fallback */
+    }
+}
+
+/* Emit one TYPE entry (record with fields, or opaque).
+   Returns without writing anything for non-exported or non-TYPE symbols. */
+static void write_one_type(FILE *f, const char *mod_name, Symbol *sym) {
+    TypeDesc *td = sym->type;
+    if (td && td->form == TF_RECORD) {
+        Symbol *fld;
+        int has_exported = 0;
+        for (fld = td->fields; fld; fld = fld->next)
+            if (fld->exported) { has_exported = 1; break; }
+        if (has_exported) {
+            fprintf(f, "TYPE %s_%s RECORD %ld\n",
+                    mod_name, sym->name, (long)td->size);
+            if (td->base) {
+                const char *bnm = find_type_name(td->base);
+                if (bnm) fprintf(f, "  BASE %s_%s\n", mod_name, bnm);
+            }
+            for (fld = td->fields; fld; fld = fld->next) {
+                if (!fld->exported) continue;
+                fprintf(f, "  FIELD %s ", fld->name);
+                write_type(f, fld->type);
+                fprintf(f, " %ld\n", (long)fld->offset);
+            }
+            fprintf(f, "END\n");
+        } else {
+            fprintf(f, "TYPE %s_%s\n", mod_name, sym->name);
+        }
+    } else if (td && td->form == TF_POINTER) {
+        /* Emit pointer alias so importers know it's a pointer, not opaque. */
+        fprintf(f, "TYPE %s_%s POINTER ", mod_name, sym->name);
+        write_type(f, td->base);
+        fprintf(f, "\n");
+    } else {
+        fprintf(f, "TYPE %s_%s\n", mod_name, sym->name);
     }
 }
 
 void def_write(FILE *f, const char *mod_name) {
-    /* walk the current (module-level) scope */
+    /* Write order: CONST → TYPE → VAR → PROC
+       TYPE is split into two sub-passes (root records before extended) so that
+       every BASE reference is defined before it is referenced by the reader. */
     Scope *scope = top_scope;
     Symbol *sym;
     fprintf(f, "MODULE %s\n", mod_name);
 
+    /* Pass 1: CONST */
     for (sym = scope->symbols; sym; sym = sym->next) {
         if (!sym->exported) continue;
-        /* skip imported symbols — their names contain '.' (e.g. "SYSTEM.FCarry") */
         if (strchr(sym->name, '.')) continue;
-
-        switch (sym->kind) {
-        case K_CONST:
+        if (sym->kind == K_CONST)
             fprintf(f, "CONST %s_%s %ld\n",
                     mod_name, sym->name, (long)sym->val);
-            break;
-        case K_VAR: {
+    }
+
+    /* Pass 2a: TYPE with no base (root records and all non-record types) */
+    for (sym = scope->symbols; sym; sym = sym->next) {
+        if (!sym->exported) continue;
+        if (strchr(sym->name, '.')) continue;
+        if (sym->kind == K_TYPE && sym->type &&
+            !(sym->type->form == TF_RECORD && sym->type->base))
+            write_one_type(f, mod_name, sym);
+    }
+
+    /* Pass 2b: TYPE with a base (extended records) */
+    for (sym = scope->symbols; sym; sym = sym->next) {
+        if (!sym->exported) continue;
+        if (strchr(sym->name, '.')) continue;
+        if (sym->kind == K_TYPE && sym->type &&
+            sym->type->form == TF_RECORD && sym->type->base)
+            write_one_type(f, mod_name, sym);
+    }
+
+    /* Pass 3: VAR */
+    for (sym = scope->symbols; sym; sym = sym->next) {
+        if (!sym->exported) continue;
+        if (strchr(sym->name, '.')) continue;
+        if (sym->kind == K_VAR) {
             int seg = (sym->level == 0) ? SEG_DATA : SEG_CODE;
             fprintf(f, "VAR %s_%s %d %ld\n",
                     mod_name, sym->name, seg, (long)sym->adr);
-            break;
         }
-        case K_TYPE: {
-            TypeDesc *td = sym->type;
-            if (td && td->form == TF_RECORD) {
-                Symbol *fld;
-                int has_exported = 0;
-                for (fld = td->fields; fld; fld = fld->next)
-                    if (fld->exported) { has_exported = 1; break; }
-                if (has_exported) {
-                    fprintf(f, "TYPE %s_%s RECORD %ld\n",
-                            mod_name, sym->name, (long)td->size);
-                    for (fld = td->fields; fld; fld = fld->next) {
-                        if (!fld->exported) continue;
-                        fprintf(f, "  FIELD %s ", fld->name);
-                        write_type(f, fld->type);
-                        fprintf(f, " %ld\n", (long)fld->offset);
-                    }
-                    fprintf(f, "END\n");
-                } else {
-                    fprintf(f, "TYPE %s_%s\n", mod_name, sym->name);
-                }
-            } else {
-                fprintf(f, "TYPE %s_%s\n", mod_name, sym->name);
-            }
-            break;
-        }
-        case K_PROC: {
-            TypeDesc *pt = sym->type;
-            if (pt && pt->is_inline) {
-                /* INLINE proc: emit INLINE keyword + byte pattern */
-                int j;
-                fprintf(f, "INLINE %s_%s ", mod_name, sym->name);
-                write_type(f, pt ? pt->ret_type : NULL);
-                fprintf(f, "\n");
-                if (pt->n_params > 0) {
-                    Symbol *p;
-                    for (p = pt->params; p; p = p->next) {
-                        if (p->kind == K_VARPARAM)
-                            fprintf(f, "  PARAM VAR %s ", p->name);
-                        else
-                            fprintf(f, "  PARAM %s ", p->name);
-                        write_type(f, p->type);
-                        fprintf(f, "\n");
-                    }
-                }
-                /* emit the byte pattern as space-separated entries:
-                   raw byte: decimal value; param ref: P<index> */
-                fprintf(f, "  BYTES");
-                for (j = 0; j < pt->n_inline; j++) {
-                    InlineEntry *e = &pt->inline_data[j];
-                    if (e->is_param)
-                        fprintf(f, " P%d", e->param_idx);
+    }
+
+    /* Pass 4: PROC and INLINE */
+    for (sym = scope->symbols; sym; sym = sym->next) {
+        TypeDesc *pt;
+        if (!sym->exported) continue;
+        if (strchr(sym->name, '.')) continue;
+        if (sym->kind != K_PROC) continue;
+        pt = sym->type;
+        if (pt && pt->is_inline) {
+            int j;
+            fprintf(f, "INLINE %s_%s ", mod_name, sym->name);
+            write_type(f, pt ? pt->ret_type : NULL);
+            fprintf(f, "\n");
+            if (pt->n_params > 0) {
+                Symbol *p;
+                for (p = pt->params; p; p = p->next) {
+                    if (p->kind == K_VARPARAM)
+                        fprintf(f, "  PARAM VAR %s ", p->name);
                     else
-                        fprintf(f, " %d", (int)e->raw_byte);
+                        fprintf(f, "  PARAM %s ", p->name);
+                    write_type(f, p->type);
+                    fprintf(f, "\n");
                 }
-                fprintf(f, "\n");
-                fprintf(f, "END\n");
-            } else {
-                fprintf(f, "PROC %s_%s %s ", mod_name, sym->name,
-                        (pt && pt->is_far) ? "FAR" : "NEAR");
-                write_type(f, pt ? pt->ret_type : NULL);
-                fprintf(f, "\n");
-                if (pt && pt->n_params > 0) {
-                    Symbol *p;
-                    for (p = pt->params; p; p = p->next) {
-                        if (p->kind == K_VARPARAM)
-                            fprintf(f, "  PARAM VAR %s ", p->name);
-                        else
-                            fprintf(f, "  PARAM %s ", p->name);
-                        write_type(f, p->type);
-                        fprintf(f, "\n");
-                    }
-                }
-                fprintf(f, "END\n");
             }
-            break;
-        }
-        default:
-            break;
+            fprintf(f, "  BYTES");
+            for (j = 0; j < pt->n_inline; j++) {
+                InlineEntry *e = &pt->inline_data[j];
+                if (e->is_param)
+                    fprintf(f, " P%d", e->param_idx);
+                else
+                    fprintf(f, " %d", (int)e->raw_byte);
+            }
+            fprintf(f, "\n");
+            fprintf(f, "END\n");
+        } else {
+            fprintf(f, "PROC %s_%s %s ", mod_name, sym->name,
+                    (pt && pt->is_far) ? "FAR" : "NEAR");
+            write_type(f, pt ? pt->ret_type : NULL);
+            fprintf(f, "\n");
+            if (pt && pt->n_params > 0) {
+                Symbol *p;
+                for (p = pt->params; p; p = p->next) {
+                    if (p->kind == K_VARPARAM)
+                        fprintf(f, "  PARAM VAR %s ", p->name);
+                    else
+                        fprintf(f, "  PARAM %s ", p->name);
+                    write_type(f, p->type);
+                    fprintf(f, "\n");
+                }
+            }
+            fprintf(f, "END\n");
         }
     }
 }
@@ -152,19 +213,32 @@ static void make_short(const char *fullname, char *short_name) {
     short_name[NAME_LEN-1] = '\0';
 }
 
+/* Alias being read — set by def_read so resolve_type_name can try alias.name */
+static char s_cur_alias[NAME_LEN] = "";
+
 /* Look up a type by its short name in the current scope.
    Used when parsing PARAM/FIELD types that refer to other types by name. */
 static TypeDesc *resolve_type_name(const char *tname) {
     Symbol *s;
-    if (strcmp(tname, "INTEGER") == 0) return type_integer;
-    if (strcmp(tname, "BOOLEAN") == 0) return type_boolean;
-    if (strcmp(tname, "CHAR")    == 0) return type_char;
-    if (strcmp(tname, "BYTE")    == 0) return type_byte;
-    if (strcmp(tname, "LONGINT") == 0) return type_longint;
-    if (strcmp(tname, "ADDRESS") == 0) return type_address;
-    if (strcmp(tname, "VOID")    == 0) return type_notype;
-    if (strcmp(tname, "ARRAY")   == 0) return type_new_array(type_char, -1); /* open ARRAY OF CHAR */
-    /* Search current scope for a K_TYPE symbol */
+    char qn[NAME_LEN*2];
+    if (strcmp(tname, "INTEGER")  == 0) return type_integer;
+    if (strcmp(tname, "BOOLEAN")  == 0) return type_boolean;
+    if (strcmp(tname, "CHAR")     == 0) return type_char;
+    if (strcmp(tname, "BYTE")     == 0) return type_byte;
+    if (strcmp(tname, "LONGINT")  == 0) return type_longint;
+    if (strcmp(tname, "REAL")     == 0) return type_real;
+    if (strcmp(tname, "LONGREAL") == 0) return type_longreal;
+    if (strcmp(tname, "SET")      == 0) return type_set;
+    if (strcmp(tname, "ADDRESS")  == 0) return type_address;
+    if (strcmp(tname, "VOID")     == 0) return type_notype;
+    if (strcmp(tname, "ARRAY")    == 0) return type_new_array(type_char, -1); /* open ARRAY OF CHAR */
+    /* Try alias-qualified name first (types from this module: alias.shortname) */
+    if (s_cur_alias[0]) {
+        snprintf(qn, sizeof(qn), "%s.%s", s_cur_alias, tname);
+        s = sym_find(qn);
+        if (s && s->kind == K_TYPE) return s->type;
+    }
+    /* Fall back to plain name (handles pre-loaded imported types) */
     s = sym_find(tname);
     if (s && s->kind == K_TYPE) return s->type;
     /* Unknown type name: warn (likely renamed/stale .def) and fall back to INTEGER. */
@@ -198,17 +272,67 @@ static TypeDesc *parse_def_type(char **pp) {
     return resolve_type_name(token);
 }
 
+/* Deferred BASE patches: BASE lines may reference types not yet loaded.
+   Linked list of (derived_rec, base_name_short) pairs; resolved after all types load. */
+typedef struct BasePatchNode {
+    TypeDesc *derived;
+    char      base_short[NAME_LEN];
+    struct BasePatchNode *next;
+} BasePatchNode;
+
 int def_read(FILE *f, const char *alias) {
     char line[512];
     char mod_name[NAME_LEN] = "";
+    TypeDesc *cur_rec     = NULL;
+    int32_t   cur_rec_total_size = 0;
+    TypeDesc *cur_proc    = NULL;
+    TypeDesc *cur_inline  = NULL;
+    BasePatchNode *base_patches = NULL;  /* linked list head */
+    BasePatchNode *bp_node;
 
-    /* current RECORD type being built (for FIELD lines) */
-    TypeDesc *cur_rec  = NULL;
-    int32_t cur_rec_total_size = 0; /* declared total size from .def (authoritative) */
-    /* current PROC type being built (for PARAM lines) */
-    TypeDesc *cur_proc = NULL;
-    /* current INLINE proc type being built (for PARAM and BYTES lines) */
-    TypeDesc *cur_inline = NULL;
+    /* set module-level alias for resolve_type_name */
+    strncpy(s_cur_alias, alias, NAME_LEN-1);
+    s_cur_alias[NAME_LEN-1] = '\0';
+
+    /* Pre-pass: register all RECORD type stubs before processing fields.
+       This avoids "unknown type" warnings when FIELD lines reference types
+       defined later in the same .def (circular/forward pointer references). */
+    {
+        char pline[512];
+        char pkeyword[32]; int pkn;
+        char pfullname[NAME_LEN*2], pshort[NAME_LEN], pqname[NAME_LEN*2];
+        char pmod[NAME_LEN] = "";
+        char *pp, *pq;
+        while (fgets(pline, sizeof(pline), f)) {
+            trim_nl(pline);
+            pp = trim_lead(pline);
+            pkn = 0; pq = pp;
+            while (*pq && *pq != ' ' && *pq != '\t') {
+                if (pkn < 31) pkeyword[pkn++] = *pq; pq++;
+            }
+            pkeyword[pkn] = '\0';
+            pq = trim_lead(pq);
+            if (strcmp(pkeyword, "MODULE") == 0) {
+                sscanf(pq, "%63s", pmod);
+            } else if (strcmp(pkeyword, "TYPE") == 0 && pmod[0]) {
+                char psubkw[16] = "";
+                pfullname[0] = '\0';
+                sscanf(pq, "%63s %15s", pfullname, psubkw);
+                if (strcmp(psubkw, "RECORD") == 0) {
+                    make_short(pfullname, pshort);
+                    snprintf(pqname, sizeof(pqname), "%s.%s", alias, pshort);
+                    /* Register stub only if not already present */
+                    if (!sym_find(pqname)) {
+                        Symbol *ps = sym_new(pqname, K_TYPE);
+                        ps->type     = type_new_record(NULL);
+                        ps->exported = 1;
+                        strncpy(ps->mod_name, alias, NAME_LEN-1);
+                    }
+                }
+            }
+        }
+        rewind(f);
+    }
 
     while (fgets(line, sizeof(line), f)) {
         char *p;
@@ -219,7 +343,6 @@ int def_read(FILE *f, const char *alias) {
         char fullname[NAME_LEN*2];
         char short_name[NAME_LEN];
         char fname[NAME_LEN];
-        char typestr[NAME_LEN];
         char pname[NAME_LEN];
         char subkw[16];
         char kw2[NAME_LEN];  /* for PARAM VAR detection */
@@ -311,17 +434,42 @@ int def_read(FILE *f, const char *alias) {
             continue;
         }
 
+        /* ── BASE: record base for current RECORD (deferred: base may not be loaded yet) ── */
+        if (strcmp(keyword, "BASE") == 0 && cur_rec) {
+            char base_full[NAME_LEN*2];
+            char base_short[NAME_LEN];
+            base_full[0] = '\0';
+            sscanf(q, "%63s", base_full);
+            make_short(base_full, base_short);
+            bp_node = (BasePatchNode *)malloc(sizeof(BasePatchNode));
+            if (bp_node) {
+                bp_node->derived = cur_rec;
+                strncpy(bp_node->base_short, base_short, NAME_LEN-1);
+                bp_node->base_short[NAME_LEN-1] = '\0';
+                bp_node->next  = base_patches;
+                base_patches   = bp_node;
+            }
+            continue;
+        }
+
         /* ── FIELD: add field to current RECORD ── */
         if (strcmp(keyword, "FIELD") == 0 && cur_rec) {
-            /* FIELD <name> <type> <offset> <size> */
-            ofs_l = 0; /* size unused */
-            sscanf(q, "%32s %32s %ld", fname, typestr, &ofs_l);
+            /* FIELD <name> <type...> <offset>
+               type may be multi-token (e.g. "POINTER VOID") so parse name first,
+               then use parse_def_type, then read trailing offset. */
+            char *qf = q;
+            fname[0] = '\0';
+            sscanf(qf, "%32s", fname);
+            /* advance past fname */
+            while (*qf && *qf != ' ' && *qf != '\t') qf++;
+            qf = trim_lead(qf);
+            ft = parse_def_type(&qf);
+            ofs_l = 0;
+            sscanf(qf, "%ld", &ofs_l);
             offset = (int32_t)ofs_l;
-            ft = resolve_type_name(typestr);
             fs = type_add_field(cur_rec, fname, ft);
             /* override offset from .def (authoritative) */
             fs->offset = offset;
-            /* fix up the record size to include this field (may already be correct) */
             (void)fs;
             continue;
         }
@@ -407,22 +555,48 @@ int def_read(FILE *f, const char *alias) {
                 rest = trim_lead(rest);
                 sscanf(rest, "%ld", &ofs_l);
                 total_size = (int32_t)ofs_l;
-                /* Build new record type; size will be restored at END */
-                rec = type_new_record(NULL);
-                rec->size = 0;   /* start at 0 so type_add_field offsets compute cleanly */
-                s = sym_new(qname, K_TYPE);
-                s->type     = rec;
-                s->exported = 1;
-                strncpy(s->mod_name, alias, NAME_LEN-1);
+                /* Use pre-registered stub if available; otherwise create new */
+                s = sym_find(qname);
+                if (s && s->kind == K_TYPE && s->type->form == TF_RECORD) {
+                    rec = s->type;
+                    rec->size = 0;  /* reset so type_add_field works cleanly */
+                } else {
+                    rec = type_new_record(NULL);
+                    s = sym_new(qname, K_TYPE);
+                    s->type     = rec;
+                    s->exported = 1;
+                    strncpy(s->mod_name, alias, NAME_LEN-1);
+                }
                 cur_rec = rec;
                 cur_rec_total_size = total_size; /* saved; restored at END */
                 (void)s;  /* registered in scope; no further ref needed */
+            } else if (strcmp(subkw, "POINTER") == 0) {
+                /* TYPE name POINTER base — pointer alias */
+                TypeDesc *base;
+                /* advance q past "POINTER" to reach the base type token */
+                rest = q;
+                while (*rest && *rest != ' ' && *rest != '\t') rest++;
+                rest = trim_lead(rest);
+                base = parse_def_type(&rest);
+                s = sym_find(qname);
+                if (s && s->kind == K_TYPE) {
+                    /* update existing stub if present */
+                    s->type = type_new_pointer(base);
+                } else {
+                    s = sym_new(qname, K_TYPE);
+                    s->type     = type_new_pointer(base);
+                    s->exported = 1;
+                    strncpy(s->mod_name, alias, NAME_LEN-1);
+                }
             } else {
                 /* plain opaque type */
-                s = sym_new(qname, K_TYPE);
-                s->type     = type_integer;
-                s->exported = 1;
-                strncpy(s->mod_name, alias, NAME_LEN-1);
+                s = sym_find(qname);
+                if (!s) {
+                    s = sym_new(qname, K_TYPE);
+                    s->type     = type_integer;
+                    s->exported = 1;
+                    strncpy(s->mod_name, alias, NAME_LEN-1);
+                }
             }
 
         /* ── INLINE proc (INLINE fullname rettype … PARAM … BYTES … END) ── */
@@ -479,6 +653,23 @@ int def_read(FILE *f, const char *alias) {
     /* Close any unclosed PROC or INLINE block (missing END) */
     if (cur_proc)   type_calc_arg_size(cur_proc);
     if (cur_inline) type_calc_arg_size(cur_inline);
+
+    /* Resolve deferred BASE links — all types are now loaded */
+    for (bp_node = base_patches; bp_node; bp_node = bp_node->next) {
+        char qn[NAME_LEN*2];
+        Symbol *bs;
+        snprintf(qn, sizeof(qn), "%s.%s", alias, bp_node->base_short);
+        bs = sym_find(qn);
+        if (!bs || bs->kind != K_TYPE) bs = sym_find(bp_node->base_short);
+        if (bs && bs->kind == K_TYPE && bs->type->form == TF_RECORD)
+            bp_node->derived->base = bs->type;
+    }
+    /* free the patch list */
+    while (base_patches) {
+        BasePatchNode *next = base_patches->next;
+        free(base_patches);
+        base_patches = next;
+    }
 
     return 0;
 }

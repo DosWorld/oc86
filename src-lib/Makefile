@@ -1,10 +1,10 @@
 OC      = ../src/oc
 LIBDIR  = ../lib
 
-all: SYSTEM.om Out.om Out87.om In.om Strings.om Files.om Crt.om Dos.om
+all: SYSTEM.om Out.om Out87.om In.om Strings.om Files.om Crt.om Dos.om IO.om Mem.om
 
 install: all
-	cp SYSTEM.om Out.om Out87.om In.om Strings.om Files.om Dos.om Crt.om $(LIBDIR)/
+	cp SYSTEM.om Out.om Out87.om In.om Strings.om Files.om Dos.om Crt.om IO.om Mem.om $(LIBDIR)/
 
 SYSTEM.om: SYS.RDF SYSTEM.mod $(OC)
 	$(OC) -SYSTEM SYSTEM.mod
@@ -30,7 +30,13 @@ Dos.om: Dos.mod SYSTEM.om $(OC)
 Crt.om: Crt.mod SYSTEM.om $(OC)
 	OBERON_LIB=. $(OC) Crt.mod
 
+IO.om: IO.mod Files.om Out.om SYSTEM.om $(OC)
+	OBERON_LIB=. $(OC) IO.mod
+
+Mem.om: Mem.mod SYSTEM.om $(OC)
+	OBERON_LIB=. $(OC) Mem.mod
+
 clean:
-	rm -f SYSTEM.om Out.om Out87.om Strings.om Files.om Dos.om Crt.om In.om
+	rm -f SYSTEM.om Out.om Out87.om Strings.om Files.om Dos.om Crt.om In.om IO.om Mem.om
 
 .PHONY: all install clean

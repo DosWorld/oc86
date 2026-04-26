@@ -1,3 +1,4 @@
+(*$R-*)
 MODULE Out;
 
 PROCEDURE Open*;

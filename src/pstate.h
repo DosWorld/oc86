@@ -12,6 +12,7 @@
 /* Shared mutable state owned by parser.c */
 extern Scanner *pe_sc;          /* current scanner */
 extern int      pe_mod_uses_fpu;/* set when REAL/LONGREAL appears */
+extern int      pe_bounds_check; /* $R+/$R- directive: 1=emit bounds checks, 0=off (default) */
 
 /* Helpers defined in parser.c, used by pexpr.c */
 void pe_error(const char *msg);
@@ -26,5 +27,10 @@ void pe_parse_type(TypeDesc **out);
 /* Emit an inline procedure byte pattern with actual arg address substitution.
    Defined in parser.c; used by pexpr.c for inline calls in expression context. */
 void pe_emit_inline_call(TypeDesc *pt);
+
+/* Emit a call to an unresolved FORWARD-declared local procedure and record
+   the patch site.  is_far=1 → PUSH CS + CALL NEAR (exported FAR convention).
+   Defined in parser.c; used by pexpr.c for forward calls in expression context. */
+void pe_fwd_emit_call(void *sym, int is_far);
 
 #endif

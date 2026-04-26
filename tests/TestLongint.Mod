@@ -2,6 +2,10 @@ MODULE TestLongint;
 
 IMPORT Out;
 
+CONST
+  MaxLong = 7FFFFFFFH;
+  MinLong = 80000000H;
+
 VAR
   totalTests, passedTests: INTEGER;
   testResult: INTEGER;
@@ -238,6 +242,90 @@ BEGIN
   ReportTest
 END TestNegMul;
 
+(* Test 11: & and OR on LONGINT comparison results *)
+PROCEDURE TestBoolOps*;
+VAR
+  a, b: LONGINT;
+BEGIN
+  InitTest("LONGINT boolean & and OR");
+  a := LONGINT(10);
+  b := LONGINT(20);
+  Assert((a > 0) & (b > 0), 1);
+  Assert((a < b) & (b > a), 2);
+  Assert(~((a > b) & (b > 0)), 3);
+  Assert((a > b) OR (b > a), 4);
+  Assert(~((a > b) OR (a = b)), 5);
+  a := LONGINT(-1);
+  Assert((a < 0) & (a # 0), 6);
+  Assert((a > 0) OR (a < 0), 7);
+  ReportTest
+END TestBoolOps;
+
+(* Test 12: SYSTEM.LSL on LONGINT *)
+PROCEDURE TestLSL*;
+VAR
+  a, r: LONGINT;
+BEGIN
+  InitTest("SYSTEM.LSL on LONGINT");
+  a := LONGINT(1);   r := SYSTEM.LSL(a, 1);  AssertLong(r, LONGINT(2),       1);
+  a := LONGINT(3);   r := SYSTEM.LSL(a, 2);  AssertLong(r, LONGINT(12),      2);
+  a := LONGINT(1);   r := SYSTEM.LSL(a, 8);  AssertLong(r, LONGINT(256),     3);
+  a := LONGINT(1);   r := SYSTEM.LSL(a, 31); AssertLong(r, MinLong,           4);
+  a := MaxLong;      r := SYSTEM.LSL(a, 1);  AssertLong(r, LONGINT(-2),      5);
+  a := 40000000H;    r := SYSTEM.LSL(a, 1);  AssertLong(r, MinLong,           6);
+  a := LONGINT(1);   r := SYSTEM.LSL(a, 0);  AssertLong(r, LONGINT(1),       7);
+  ReportTest
+END TestLSL;
+
+(* Test 13: SYSTEM.LSR on LONGINT *)
+PROCEDURE TestLSR*;
+VAR
+  a, r: LONGINT;
+BEGIN
+  InitTest("SYSTEM.LSR on LONGINT");
+  a := LONGINT(2);   r := SYSTEM.LSR(a, 1);  AssertLong(r, LONGINT(1),       1);
+  a := LONGINT(12);  r := SYSTEM.LSR(a, 2);  AssertLong(r, LONGINT(3),       2);
+  a := LONGINT(256); r := SYSTEM.LSR(a, 8);  AssertLong(r, LONGINT(1),       3);
+  a := LONGINT(-2);  r := SYSTEM.LSR(a, 1);  AssertLong(r, MaxLong,           4);
+  a := MinLong;      r := SYSTEM.LSR(a, 1);  AssertLong(r, 40000000H,         5);
+  a := LONGINT(-1);  r := SYSTEM.LSR(a, 1);  AssertLong(r, MaxLong,           6);
+  a := LONGINT(1);   r := SYSTEM.LSR(a, 0);  AssertLong(r, LONGINT(1),       7);
+  ReportTest
+END TestLSR;
+
+(* Test 14: SYSTEM.ASR on LONGINT *)
+PROCEDURE TestASR*;
+VAR
+  a, r: LONGINT;
+BEGIN
+  InitTest("SYSTEM.ASR on LONGINT");
+  a := LONGINT(2);   r := SYSTEM.ASR(a, 1);  AssertLong(r, LONGINT(1),       1);
+  a := LONGINT(12);  r := SYSTEM.ASR(a, 2);  AssertLong(r, LONGINT(3),       2);
+  a := LONGINT(-2);  r := SYSTEM.ASR(a, 1);  AssertLong(r, LONGINT(-1),      3);
+  a := LONGINT(-4);  r := SYSTEM.ASR(a, 1);  AssertLong(r, LONGINT(-2),      4);
+  a := LONGINT(-16); r := SYSTEM.ASR(a, 2);  AssertLong(r, LONGINT(-4),      5);
+  a := LONGINT(-1);  r := SYSTEM.ASR(a, 5);  AssertLong(r, LONGINT(-1),      6);
+  a := MinLong;      r := SYSTEM.ASR(a, 1);  AssertLong(r, -40000000H,        7);
+  a := LONGINT(1);   r := SYSTEM.ASR(a, 0);  AssertLong(r, LONGINT(1),       8);
+  ReportTest
+END TestASR;
+
+(* Test 15: SYSTEM.ROR on LONGINT *)
+PROCEDURE TestROR*;
+VAR
+  a, r: LONGINT;
+BEGIN
+  InitTest("SYSTEM.ROR on LONGINT");
+  a := LONGINT(1);   r := SYSTEM.ROR(a, 1);  AssertLong(r, MinLong,           1);
+  a := LONGINT(2);   r := SYSTEM.ROR(a, 1);  AssertLong(r, LONGINT(1),       2);
+  a := LONGINT(4);   r := SYSTEM.ROR(a, 1);  AssertLong(r, LONGINT(2),       3);
+  a := 40000000H;    r := SYSTEM.ROR(a, 1);  AssertLong(r, 20000000H,         4);
+  a := LONGINT(1);   r := SYSTEM.ROR(a, 2);  AssertLong(r, 40000000H,         5);
+  a := LONGINT(3);   r := SYSTEM.ROR(a, 1);  AssertLong(r, MinLong + 1,       6);
+  a := LONGINT(1);   r := SYSTEM.ROR(a, 0);  AssertLong(r, LONGINT(1),       7);
+  ReportTest
+END TestROR;
+
 PROCEDURE RunAllTests*;
 BEGIN
   totalTests := 0;
@@ -252,6 +340,11 @@ BEGIN
   TestVarParam;
   TestLoop;
   TestNegMul;
+  TestBoolOps;
+  TestLSL;
+  TestLSR;
+  TestASR;
+  TestROR;
   PrintSummary
 END RunAllTests;
 

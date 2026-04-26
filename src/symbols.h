@@ -55,6 +55,9 @@
 #define SP_TOINT  25   /* INTEGER(x)  -> INTEGER  truncate/cast to 16-bit    */
 #define SP_TOBYTE 26   /* BYTE(x)     -> BYTE     truncate/cast to 8-bit     */
 #define SP_TOLONG 27   /* LONGINT(x)  -> LONGINT  sign-extend/cast to 32-bit */
+#define SP_AND    28   /* SYSTEM.AND(x,y) -> bitwise AND; BYTE/INTEGER->INTEGER, LONGINT->LONGINT */
+#define SP_IOR    29   /* SYSTEM.IOR(x,y) -> bitwise OR;  BYTE/INTEGER->INTEGER, LONGINT->LONGINT */
+#define SP_XOR    30   /* SYSTEM.XOR(x,y) -> bitwise XOR; BYTE/INTEGER->INTEGER, LONGINT->LONGINT */
 
 /* sizes */
 #define SZ_INTEGER 2
@@ -98,6 +101,8 @@ struct TypeDesc {
     TypeDesc *base;
     int       tag_ofs;
     int       n_fields;
+    int       tag_id;      /* unique type tag ID (1-based); 0 = untagged */
+    uint16_t  desc_ofs;    /* data-seg offset of type descriptor array */
     /* proc */
     Symbol   *params;
     Symbol   *params_tail;
@@ -126,6 +131,7 @@ struct Symbol {
     uint32_t  code_ofs;
     int       rdoff_id;   /* import id or -1 */
     int       fwd_decl;
+    void     *fwd_patches; /* FwdCallNode* list of unresolved call sites (FORWARD decl) */
     int       typeless;    /* 1 = typeless VAR param (VAR x without type); value is ADDRESS */
     /* field */
     int32_t   offset;
@@ -151,6 +157,7 @@ extern TypeDesc *type_integer, *type_boolean, *type_char,
                *type_byte, *type_set, *type_niltype, *type_notype,
                *type_address, *type_longint, *type_real, *type_longreal;
 extern Scope   *top_scope, *universe;
+extern int      next_tag_id;
 
 void      sym_init(void);
 void      sym_open_scope(void);

@@ -1,3 +1,4 @@
+(*$R-*)
 MODULE Strings;
 
 PROCEDURE Length*(s: ARRAY OF CHAR): INTEGER;
@@ -110,5 +111,27 @@ BEGIN
   END;
   dst[i] := 0X
 END Extract;
+
+PROCEDURE Equal*(a, b: ARRAY OF CHAR): BOOLEAN;
+VAR i: INTEGER;
+BEGIN
+  i := 0;
+  WHILE (i < LEN(a)) & (i < LEN(b)) & (a[i] = b[i]) & (a[i] # 0X) DO
+    INC(i)
+  END;
+  RETURN (i < LEN(a)) & (i < LEN(b)) & (a[i] = b[i])
+END Equal;
+
+PROCEDURE Copy*(src: ARRAY OF CHAR; VAR dst: ARRAY OF CHAR);
+VAR i, max: INTEGER;
+BEGIN
+  max := LEN(dst) - 1;
+  i := 0;
+  WHILE (i < LEN(src)) & (i < max) & (src[i] # 0X) DO
+    dst[i] := src[i];
+    INC(i)
+  END;
+  dst[i] := 0X
+END Copy;
 
 END Strings.

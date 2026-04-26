@@ -5,6 +5,7 @@ SRCS    = main.c scanner.c symbols.c codegen.c rdoff.c parser.c pexpr.c import.c
 OBJS    = $(SRCS:.c=.o)
 TARGET  = oc
 OLINK   = olink
+TDINFO  = tdinfo
 
 TEST_BINS = \
     ../tests/test_scanner \
@@ -14,13 +15,16 @@ TEST_BINS = \
     ../tests/test_tar \
     ../tests/test_def
 
-all: $(TARGET) $(OLINK)
+all: $(TARGET) $(OLINK) $(TDINFO)
 
 $(TARGET): $(OBJS)
 	$(CC) $(CFLAGS) -o $@ $^
 
 $(OLINK): olink.c compat.c tar.c
 	$(CC) $(CFLAGS) -o $@ olink.c compat.c tar.c
+
+$(TDINFO): tdinfo.c
+	$(CC) $(CFLAGS) -o $@ tdinfo.c
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c -o $@ $<
@@ -53,6 +57,6 @@ test: $(TARGET)
 	OBERON_LIB=.:../lib ./$(TARGET) ../tests/OutHello.Mod
 
 clean:
-	rm -f $(OBJS) $(TARGET) $(OLINK) *.rdf *.def *.om $(TEST_BINS)
+	rm -f $(OBJS) $(TARGET) $(OLINK) $(TDINFO) *.rdf *.def *.om $(TEST_BINS)
 
 .PHONY: all test tests clean

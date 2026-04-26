@@ -30,6 +30,7 @@ This compiler implements an Oberon-07 dialect with a few deliberate extensions a
 - CASE supports integer labels and ranges `lo..hi` and is compiled with a hidden local for the selector and a linear scan of arms.
 - SET is 16-bit; literals, ranges and set operators (+,-,*,/) are implemented.
 - FOR supports `BY` with negative or positive integer step values.
+- `v IS T`: compile-time type test. LHS must be `POINTER TO RECORD`; RHS must be a RECORD type name. Folds to TRUE when the LHS static type extends T, FALSE when unrelated. Runtime type test (T extends LHS) emits an error — no type-tag infrastructure yet.
 
 ### Extensions and target-specific details
 - Line comment `//` and system comment directives `(*$...*)` / `//$...` are supported. `$L path.rdf` packs extra .rdf files into the .om.
@@ -109,7 +110,52 @@ DOS memory model (brief): real-mode 16-bit segmented addressing (segment:offset)
 - REAL and LONGREAL are implemented with x87 FPU. If FPU is used, compiler sets __init to call SYSTEM_REQUIRE87.
 - Type casts: INTEGER(x), BYTE(x), LONGINT(x), REAL(x), LONGREAL(x); FLOAT(x) is synonym for REAL(x); ENTIER(x) synonym for FLOOR(x).
 
-## 7. Open arrays — writing and calling (examples and rules)
+## 7. Standard library modules
+
+| Module   | Key exports | Notes |
+|----------|-------------|-------|
+| `SYSTEM` | `Registers`, `Intr`, `ADDRESS`, `FZero`/`FSign`/`FCarry` | Implicit import for all modules |
+| `Out`    | `Char`, `String`, `Int`, `Hex`, `Ln` | Stdout character/string/integer output |
+| `Out87`  | `Real`, `LongReal` | FPU-based float formatting; links `Out` |
+| `In`     | `Int`, `String` | Stdin reading |
+| `Strings`| `Length`, `Pos`, `Append`, `Insert`, `Delete`, `Replace`, `Extract`, `Equal`, `Copy` | Null-terminated ARRAY OF CHAR operations |
+| `Files`  | `File`, `Rider`, `Old`, `New`, `Register`, `Close`, `Set`, `BlockRead`, `BlockWrite`, `Read`, `Write`, `Pos` | DOS file I/O |
+| `Crt`    | cursor, clear, colour | DOS INT 10h terminal control |
+| `Dos`    | `ARGCOUNT`, `ARG`, `GetEnv`, `GetPsp`, `Intr`, `MsDos` | Command-line args, environment, DOS calls |
+| `IO`     | `Rider`, `StdOut`, `StdErr`, `ReadChar`, `WriteChar`, `WriteStr`, `WriteInt` | Raw byte I/O to DOS handles; own Rider type (not Files.Rider) |
+| `Mem`    | `Block`, `Alloc`, `Free` | Heap allocator; guards against >65000-byte allocations |
+
+### IO module notes
+
+`IO.Rider` wraps a raw DOS file handle integer (not a `Files.File`).  Use `IO.StdOut(r)` or `IO.StdErr(r)` to obtain a rider for the standard output/error handles, then pass it to `IO.WriteStr`, `IO.WriteInt`, etc.  `IO.ReadChar` reads one byte from the handle.
+
+```oberon
+IMPORT IO;
+VAR r: IO.Rider;
+BEGIN
+  IO.StdOut(r);
+  IO.WriteStr(r, "hello");
+  IO.WriteChar(r, 0AX)   (* newline *)
+END
+```
+
+### Mem module notes
+
+`Mem.Alloc(size)` returns a `Mem.Block` pointer (NIL if `size <= 0` or `size > 65000`).  Use `SYSTEM.ADR(p^)` to obtain the raw far `ADDRESS` of the allocated memory, or access it through `p^.data`.  `Mem.Free(p)` calls `DISPOSE`.
+
+```oberon
+IMPORT Mem;
+VAR b: Mem.Block;
+BEGIN
+  b := Mem.Alloc(1024);
+  IF b # NIL THEN
+    (* use b^.data[0..1023] *)
+    Mem.Free(b)
+  END
+END
+```
+
+## 8. Open arrays — writing and calling (examples and rules)
 - Callee declaration example:
 
   PROCEDURE Sum(a: ARRAY OF INTEGER): INTEGER;
@@ -133,14 +179,14 @@ DOS memory model (brief): real-mode 16-bit segmented addressing (segment:offset)
 
 - Important: global arrays use DS as segment; locals use SS.
 
-## 8. Writing external libraries in assembler (practical workflow)
+## 9. Writing external libraries in assembler (practical workflow)
 This section gives a minimal, practical workflow to produce an .om containing your hand-assembled .rdf; a .def file is optional for human readers but not required to produce a usable .om.
 
 Recommended steps (minimal):
 
 1) Assemble your code to an RDOFF2 object (.RDF):
    - Use an assembler that can emit RDOFF2 (older NASM or other tool). Example (if supported):
-     nasm -f rdoff2 mylib.asm -o MyLib.RDF
+     nasm -f rdf mylib.asm -o MyLib.RDF
    - The RDF must include exported symbols (GLOBAL/PROC records) and segment blocks. Look at `src-lib/SYS.RDF` for a working example.
 
 2) Pack the RDF into a .om using oc's $L directive (recommended, simplest):
@@ -172,7 +218,7 @@ MyLib_Add:
 
 Assemble to RDOFF2 (if your NASM supports it):
 
-nasm -f rdoff2 mylib.asm -o MYLIB.RDF
+nasm -f rdf mylib.asm -o MYLIB.RDF
 
 Pack into a .om using an Oberon wrapper that references the RDF via $L:
 
@@ -197,10 +243,10 @@ Notes:
 - Return value for INTEGER is returned in AX.
 - The assembler must export the symbol named exactly as the linker will look it up (`MyLib_Add`).
 
-## 9. Examples and references
+## 10. Examples and references
 - See `src-lib/SYS.RDF` (checked-in binary) and `src-lib/SYS.ASM` for a real-world example of hand-assembled RDOFF2 objects and how they are packed into libraries.
 
-## 10. Quick troubleshooting
+## 11. Quick troubleshooting
 - Linking failures (unresolved IMPORT): ensure your .rdf is included in a .om (use `$L` in a .Mod) and exported symbol names match exactly.
 - DS/SS confusion: remember locals use SS, globals use DS; use SYSTEM.ADR to obtain correct full far addresses.
 - FPU errors: if code uses FPU ensure SYSTEM_REQUIRE87 is available or avoid floating point.

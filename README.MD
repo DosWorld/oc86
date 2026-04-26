@@ -11,7 +11,7 @@ Key features
 - RDOFF2 code generation with smart linking — only reachable modules are emitted.
 - x87 FPU support: REAL (32-bit) and LONGREAL (64-bit) arithmetic, comparison, and conversion.
 - LONGINT (32-bit signed integers) with helpers for multiplication, division, and modulus.
-- SET type (16-bit): literals, ranges, set operators (+, -, *, /), and IN membership test.
+- SET type (16-bit): literals, ranges, set operators (+, -, *, /), IN membership test, and IS compile-time type test.
 - Constant expression folding for CONST declarations.
 - FAR/NEAR procedure calling conventions with procedural variables.
 - Nested procedures with full static-link uplevel variable access (up to 3 hops).
@@ -42,7 +42,7 @@ Language extensions (vs. standard Oberon-07)
 
 Standard features that are NOT implemented
 -------------------------------------------
-- `IS` type test (scanned but not codegen'd).
+- `IS` runtime type test (compile-time fold implemented; runtime requires type tags not yet emitted).
 - Array bounds checking.
 - Mutual recursion via non-pointer fields across a TYPE section (requires two-pass scanner).
 
@@ -67,10 +67,12 @@ Standard library modules (in lib/)
 | Out      | Character, string, integer, hex output to stdout |
 | Out87    | REAL / LONGREAL formatted output (needs FPU)     |
 | In       | Stdin input (integers, strings)                  |
-| Strings  | Length, Pos, Append, Insert, Delete, Replace, Extract |
+| Strings  | Length, Pos, Append, Insert, Delete, Replace, Extract, Equal, Copy |
 | Files    | DOS file I/O (open, read, write, close, seek)    |
 | Crt      | Terminal: cursor, clear, colour (DOS INT 10h)    |
 | Dos      | DOS interface: ARGCOUNT, ARG, command-line args  |
+| IO       | Raw console/file byte I/O (Rider wrapping DOS handle; StdOut, StdErr, ReadChar, WriteChar, WriteStr, WriteInt) |
+| Mem      | Heap allocator with 65000-byte limit guard (Alloc/Free via typed Block pointer) |
 
 Getting started
 ---------------

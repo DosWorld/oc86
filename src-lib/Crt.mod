@@ -31,14 +31,14 @@ LightGray* = 7;
 
 (* Foreground color constants *)
 
-DarkGray*      = 8;
-LightBlue*     = 9;
-LightGreen*    = 10;
-LightCyan*     = 11;
-LightRed*      = 12;
-LightMagenta*  = 13;
-Yellow*        = 14;
-White*         = 15;
+DarkGray*      = 0;
+LightBlue*     = 1;
+LightGreen*    = 2;
+LightCyan*     = 3;
+LightRed*      = 4;
+LightMagenta*  = 5;
+Yellow*        = 6;
+White*         = 7;
 
 (* Add-in for blinking *)
 
@@ -82,26 +82,26 @@ PROCEDURE NoSound*;
 *)
 
 PROCEDURE KeyPressed*: BOOLEAN;
-VAR regs : SYSTEM.Registers;
+VAR r : SYSTEM.Registers;
 BEGIN
-    regs.AX := 0B00H;
-    SYSTEM.Intr(21H, regs);
-    RETURN (regs.AX DIV 256) = 0FFH;
+    r.AX := 0B00H;
+    SYSTEM.Intr(21H, r);
+    RETURN SYSTEM.AND(SYSTEM.LSR(r.AX, 8), 0FFH) = 0FFH;
 END KeyPressed;
 
 PROCEDURE ReadKey*: CHAR;
-VAR regs : SYSTEM.Registers;
+VAR r : SYSTEM.Registers;
 BEGIN
-    regs.AX := 0800H;
-    SYSTEM.Intr(21H, regs);
-    RETURN CHR(regs.AX MOD 256)
+    r.AX := 0800H;
+    SYSTEM.Intr(21H, r);
+    RETURN CHR(SYSTEM.AND(r.AX, 0FFH))
 END ReadKey;
 
 PROCEDURE TextMode*(Mode: BYTE);
-VAR regs : SYSTEM.Registers;
+VAR r : SYSTEM.Registers;
 BEGIN
-    regs.AX := Mode;
-    SYSTEM.Intr(10H, regs);
+    r.AX := SYSTEM.AND(Mode, 0FFH);
+    SYSTEM.Intr(10H, r);
 END TextMode;
 
 PROCEDURE GotoXY*(X, Y: INTEGER);
@@ -143,5 +143,41 @@ BEGIN
     Out.Char(CHR(30H + (bg MOD 8)));
     Out.Char('m');
 END TextBackground;
+
+PROCEDURE Delay*(MS: INTEGER);
+  VAR r: SYSTEM.Registers; us: LONGINT;
+BEGIN
+  IF MS <= 0 THEN RETURN END;
+  us := LONGINT(MS) * 1000;
+  WHILE us > 0 DO
+    r.AX := 8600H;
+    IF us > 65535 THEN
+      r.CX := INTEGER(SYSTEM.LSR(us, 16));
+      r.DX := INTEGER(SYSTEM.AND(us, 0FFFFH));
+      us := 0
+    ELSE
+      r.CX := 0;
+      r.DX := INTEGER(us);
+      us := 0
+    END;
+    SYSTEM.Intr(15H, r)
+  END
+END Delay;
+
+PROCEDURE Sound*(Hz: INTEGER);
+  VAR divisor: INTEGER; b: CHAR;
+BEGIN
+  IF Hz <= 0 THEN RETURN END;
+  divisor := 1193180 DIV Hz;
+  SYSTEM.PORTOUT(43H, 0B6H);
+  SYSTEM.PORTOUT(42H, SYSTEM.AND(divisor, 0FFH));
+  SYSTEM.PORTOUT(42H, SYSTEM.LSR(divisor, 8));
+  SYSTEM.PORTOUT(61H, SYSTEM.IOR(SYSTEM.PORTIN(61H), 3))
+END Sound;
+
+PROCEDURE NoSound*;
+BEGIN
+  SYSTEM.PORTOUT(61H, SYSTEM.AND(SYSTEM.PORTIN(61H), 0FCH))
+END NoSound;
 
 END Crt.

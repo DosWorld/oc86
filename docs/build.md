@@ -158,7 +158,7 @@ export OBERON_LIB=/path/to/lib          # Unix — single lib/ directory after i
 set OBERON_LIB=C:\lib                   # DOS
 ```
 
-After `make` from the root, `lib/` contains `SYSTEM.om`, `Out.om`, `Strings.om`, `Files.om`, `Crt.om`, `Dos.om`, and `SYSTEM.DEF`.
+After `make` from the root, `lib/` contains `SYSTEM.om`, `Out.om`, `Out87.om`, `In.om`, `Strings.om`, `Files.om`, `Crt.om`, `Dos.om`, `IO.om`, `Mem.om`, and `SYSTEM.DEF`.
 Set `OBERON_LIB=lib` (or the absolute path) so `oc` can resolve imports.
 Library search order: current directory → OBERON_LIB entries (left to right).
 

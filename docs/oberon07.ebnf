@@ -50,7 +50,15 @@ directive   = "L" filepath    (* $L<path> — include <path>.rdf in the output .
             | "M" integer   (* $M <size> — stack size hint (positive decimal LONGINT).
                                   Stored as META-INF/STACK.TXT in the .om when compiled
                                   with -entry.  Multiple $M directives: last one wins.
-                                  Ignored (no file written) when compiling without -entry. *) .
+                                  Ignored (no file written) when compiling without -entry. *)
+            | "R" ("+" | "-") (* $R+ enable array bounds checks; $R- disable (default).
+                                  When enabled: constant out-of-bounds index is a compile
+                                  error; variable index emits a runtime check that calls
+                                  SYSTEM_ErrIndexOutOfBounds (FAR, no args) on violation,
+                                  which prints "Array index out of bounds" and halts.
+                                  Directive takes effect immediately and applies to all
+                                  array subscripts that follow it in the source file.
+                                  $R- may appear anywhere to turn checks off again. *) .
 
 (* Keywords (all uppercase, not valid identifiers) *)
 keyword     = "ARRAY" | "BEGIN" | "BY" | "CASE" | "CONST" | "DIV" | "DO"
@@ -138,6 +146,12 @@ ProcDecl    = "PROCEDURE" ident [ "*" ] [ FormalParams ] [ ":" type ]
             | "PROCEDURE" ident [ "*" ] [ FormalParams ] [ ":" type ]
               ";" "INLINE" "(" InlineEntry { "," InlineEntry } ")" ";"
             | "PROCEDURE" ident [ "*" ] [ FormalParams ] [ ":" type ]
+              ";" [ CallingConv ";" ] "FORWARD" ";"
+            | "PROCEDURE" ident ";"
+              DeclSeq
+              [ "BEGIN" StatSeq ]
+              "END" ident ";"
+            | "PROCEDURE" ident [ "*" ] [ FormalParams ] [ ":" type ]
               ";" [ CallingConv ";" ]
               DeclSeq
               [ "BEGIN" StatSeq ]
@@ -175,7 +189,14 @@ InlineEntry = integer | ident .
    "EXTERNAL" (context-sensitive ident, must be LAST modifier): no body; implementation
    is provided by an external .rdf file linked at link time. The compiler emits an RDOFF
    IMPORT for "ModName_procname". EXTERNAL can be combined with FAR or NEAR.
-   Exported EXTERNAL procs appear in .def so other modules can call them. *)
+   Exported EXTERNAL procs appear in .def so other modules can call them.
+   "FORWARD" (context-sensitive ident): declares the procedure signature only; the body
+   must appear later in the same DeclSeq. The implementation line repeats only the
+   name: "PROCEDURE name;" (no parameters, no return type, no modifiers).
+   INLINE and EXTERNAL procedures may not be FORWARD.
+   Allowed modifiers for a FORWARD declaration: FAR, NEAR, and exported ("*").
+   All call sites emitted before the body is seen are backpatched when the body is defined.
+   An unresolved FORWARD (body never provided) is a compile error. *)
 
 FormalParams = "(" [ FPSection { ";" FPSection } ] ")" .
 
@@ -286,12 +307,14 @@ expr        = SimpleExpr [ relOp SimpleExpr ] .
    Mixed INTEGER/REAL: integer operand auto-coerced to REAL via FILD.
    Pointer comparison: both segment and offset compared.
    "IN": i IN s → BOOLEAN; i must be INTEGER/BYTE, s must be SET.
-   "IS": type test — scanned (T_IS) but NOT implemented. *)
+   "IS": type test — LHS must be POINTER TO RECORD; RHS must be a RECORD type name.
+         Folds to TRUE if static type of LHS^ extends RHS, FALSE if unrelated.
+         Runtime tag check emitted when RHS extends LHS (requires heap allocation via NEW). *)
 
-relOp       = "=" | "#" | "<" | "<=" | ">" | ">=" | "IN" .
+relOp       = "=" | "#" | "<" | "<=" | ">" | ">=" | "IN" | "IS" .
 (* "IN": SET membership — implemented. i IN s: test bit i in set s.
    Codegen: MOV BX,s; MOV CL,i; MOV AX,1; SHL AX,CL; TEST AX,BX → BOOLEAN.
-   "IS": type test — scanned (T_IS) but NOT implemented. *)
+   "IS": type test with runtime tag check (see expr note above). *)
 
 SimpleExpr  = [ "+" | "-" ] term { addOp term } .
 
@@ -359,12 +382,15 @@ ProcCallExpr = designator "(" [ ActualParams ] ")" .
 SysIntrinsicExpr = SysIdent "(" SysArgs ")" .
 (* SYSTEM intrinsics used as expressions (via SYSTEM.xxx qualified name): *)
 
-SysIdent    = "VAL" | "LSL" | "LSR" | "ASR" | "ROR" .
+SysIdent    = "VAL" | "LSL" | "LSR" | "ASR" | "ROR" | "AND" | "IOR" | "XOR" .
 (* VAL(T, x)  → T: bit-reinterpret x as type T (sizes must match). Compiler built-in.
-   LSL(x, n)  → same: logical shift left.  Compiler built-in (INTEGER/LONGINT dispatch).
-   LSR(x, n)  → same: logical shift right. Compiler built-in.
-   ASR(x, n)  → same: arithmetic shift right. Compiler built-in.
-   ROR(x, n)  → same: rotate right. Compiler built-in. *)
+   LSL(x, n)  → same type: logical shift left.   Compiler built-in (INTEGER/LONGINT dispatch).
+   LSR(x, n)  → same type: logical shift right.  Compiler built-in.
+   ASR(x, n)  → same type: arithmetic shift right. Compiler built-in.
+   ROR(x, n)  → same type: rotate right.         Compiler built-in.
+   AND(x, y)  → INTEGER or LONGINT: bitwise AND. BYTE/INTEGER→INTEGER, LONGINT→LONGINT.
+   IOR(x, y)  → INTEGER or LONGINT: bitwise OR.  BYTE/INTEGER→INTEGER, LONGINT→LONGINT.
+   XOR(x, y)  → INTEGER or LONGINT: bitwise XOR. BYTE/INTEGER→INTEGER, LONGINT→LONGINT. *)
 
 (* SYSTEM statement intrinsic (compiler built-in, requires typed designator store): *)
 (* GET(src: ADDRESS; VAR dst)  — read word from far pointer src into dst (any segment). *)

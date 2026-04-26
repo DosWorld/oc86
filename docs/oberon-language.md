@@ -1108,10 +1108,68 @@ At import sites, bytes are emitted directly — no RDOFF IMPORT record is create
 
 ---
 
+## IS type test
+
+`v IS T` is a type test where `v` is a `POINTER TO RECORD` and `T` is a `RECORD` type name (or `POINTER TO RECORD` type name, in which case its base record is used).
+
+### Rules
+
+- LHS must be a `POINTER` (or `SYSTEM.ADDRESS`).  RHS must be a `RECORD` type name (or a `POINTER TO RECORD` type name).
+- If the LHS pointer's static base type **extends** `T`, the expression folds to the constant `TRUE`.
+- If `T` **extends** the LHS base type (possible at runtime), a runtime tag check is emitted.
+- If the two types are **unrelated** (neither extends the other), the expression folds to `FALSE`.
+
+### Type tag implementation
+
+Every heap-allocated RECORD allocated by `NEW(p)` where `p: POINTER TO RECORD` gets a hidden 2-byte **type descriptor offset** stored at `[seg:ofs-2]` — two bytes *before* the record data. The POINTER variable itself holds `seg:ofs` (pointing to the data, not the tag).
+
+Each RECORD type has a globally unique integer `tag_id` (assigned at parse time, starting at 1). When a RECORD type is parsed, its **type descriptor** — a zero-terminated WORD array listing `[self_id, parent_id, ..., root_id, 0]` — is emitted into the module's data segment. `desc_ofs` in TypeDesc records the data-segment offset of this array.
+
+`NEW(p)`:
+1. Allocates `size + 2` bytes.
+2. Writes `base->desc_ofs` (a WORD) at the start of the allocation (the tag slot).
+3. Returns `ptr + 2` so the POINTER variable points to the record data.
+
+`DISPOSE(p)`:
+1. Subtracts 2 from the offset before passing the pointer to `SYSTEM_Free`.
+
+`v IS T` (runtime):
+1. Load the far pointer into ES:BX.
+2. `AX = ES:[BX-2]` — the tag descriptor offset.
+3. Scan `DS:[AX], DS:[AX+2], ...` for `T.tag_id`; return 1 if found, 0 if not (hits sentinel 0).
+
+This design keeps record field offsets unchanged (compatible with assembly code using the same record layout).
+
+### Codegen
+
+Compile-time folds: `cg_load_imm(1)` or `cg_load_imm(0)`.
+Runtime: `cg_load_item` + `cg_dxax_to_esbx` + `cg_load_tag_far` + `cg_is_tag_scan(tag_id)`.
+
+### Example
+
+```oberon
+TYPE
+  Animal  = RECORD legs: INTEGER END;
+  Dog     = RECORD (Animal) tricks: INTEGER END;
+  PAnimal = POINTER TO Animal;
+  PDog    = POINTER TO Dog;
+VAR pd: PDog; pa: PAnimal; b: BOOLEAN;
+BEGIN
+  NEW(pd);
+  b := pd IS Animal;  (* compile-time TRUE — Dog extends Animal *)
+  b := pd IS Dog;     (* compile-time TRUE — same type *)
+  pa := pd;
+  b := pa IS Dog;     (* runtime check — TRUE because pa points to a Dog *)
+  NEW(pa);
+  b := pa IS Dog;     (* runtime check — FALSE because pa now points to Animal *)
+END
+```
+
+---
+
 ## Known limitations (not yet implemented)
 
 | Feature | Workaround |
 |---------|------------|
 | Assignment: INTEGER→REAL coercion not implicit | Use `REAL(i)` / `LONGREAL(i)` at assignment |
-| Array bounds checking | Not implemented |
 | Import formal parameter type checking at call sites | Not enforced |

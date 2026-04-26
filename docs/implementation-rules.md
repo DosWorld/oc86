@@ -263,24 +263,53 @@ All file path operations use `compat.h` macros and functions:
 
 The `.def` file written by `def_write` and read by `def_read`.
 
+**Write order** (guaranteed by `def_write`): CONST → TYPE → VAR → PROC/INLINE.
+TYPE is emitted in two sub-passes: root records (no base) first, then extended records
+(with BASE).  This ensures every named type (`POINTER SomeRec`, `BASE ModName_Base`) is
+defined before it is referenced, so `def_read` never needs a forward-lookup for types.
+
 ```
 MODULE ModuleName
 CONST  ModuleName_SymName  intValue
-VAR    ModuleName_SymName  segId  byteOffset
 TYPE   ModuleName_TypeName
+TYPE   ModuleName_RecName RECORD totalSize
+  FIELD fieldName type offset
+  ...
+END
+TYPE   ModuleName_DerivedName RECORD totalSize
+  BASE  ModuleName_BaseName
+  FIELD fieldName type offset
+  ...
+END
+VAR    ModuleName_SymName  segId  byteOffset
 PROC   ModuleName_ProcName FAR rettype
   PARAM name type
   PARAM VAR name type
 END
+INLINE ModuleName_ProcName rettype
+  PARAM name type
+  BYTES byte ...
+END
 ```
+
+**Type tokens** used in FIELD, PARAM, and PROC return positions:
+`VOID` / `INTEGER` / `LONGINT` / `BOOLEAN` / `CHAR` / `BYTE` / `REAL` / `LONGREAL` /
+`SET` / `ADDRESS` / `ARRAY` / `POINTER name` (two tokens; `name` is the record symbol
+short name or `VOID` for anonymous pointer base).
+
+`REAL` and `LONGREAL` are **primitive base types** — resolved directly without scope
+lookup in `resolve_type_name`, just like `INTEGER`.  No `K_TYPE` symbol is needed.
+
+**RECORD block format:**
+- `TYPE fullname RECORD totalSize` — opens a record definition
+- `  BASE ModuleName_BaseName` — optional; sets the base (extended) record; collected
+  during parsing and resolved after all types in the file are loaded (linked-list of
+  deferred `BasePatchNode` entries, freed after resolution)
+- `  FIELD name type offset` — one line per exported field; type is a type token
+- `END` — closes the record and restores the authoritative total size
 
 **PROC line format** (always used — no legacy form):
 - `PROC fullname FAR rettype` or `PROC fullname NEAR rettype`
 - Followed by zero or more `  PARAM [VAR] name type` lines
 - Terminated by `END`
-- `rettype` is `VOID` / `INTEGER` / `LONGINT` / `BOOLEAN` / `CHAR` / `BYTE` / `POINTER type` / `ARRAY`
-- Even procedures with **no parameters** use this format (not the legacy `PROC name seg ofs` form)
-
-**Legacy format (reader only):** `PROC fullname seg offset` — accepted by `def_read` for
-hand-written `.def` files, but `def_write` never produces it.  Legacy form sets `is_far=0`
-(NEAR) by default — do not rely on it for cross-module FAR procs.
+- Even procedures with **no parameters** use this format

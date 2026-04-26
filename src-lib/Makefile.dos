@@ -3,28 +3,28 @@ all: SYSTEM.om Out.om Out87.om In.om Strings.om Files.om Crt.om Dos.om
 install: all
         copy *.om ..\lib\
 
-SYSTEM.om: SYS.RDF SYSTEM.mod ..\src\oc
+SYSTEM.om: SYS.RDF SYSTEM.mod ..\src\oc.exe
         ..\src\oc -SYSTEM SYSTEM.mod
 
-Out.om: Out.mod SYSTEM.om ..\src\oc
+Out.om: Out.mod SYSTEM.om ..\src\oc.exe
         ..\src\oc Out.mod
 
-Out87.om: Out87.mod Out.om SYSTEM.om ..\src\oc
+Out87.om: Out87.mod Out.om SYSTEM.om ..\src\oc.exe
         ..\src\oc Out87.mod
 
-In.om: In.mod SYSTEM.om ..\src\oc
+In.om: In.mod SYSTEM.om ..\src\oc.exe
         ..\src\oc In.mod
 
-Files.om: Files.mod SYSTEM.om ..\src\oc
+Files.om: Files.mod SYSTEM.om ..\src\oc.exe
         ..\src\oc Files.mod
 
-Strings.om: Strings.mod SYSTEM.om ..\src\oc
+Strings.om: Strings.mod SYSTEM.om ..\src\oc.exe
         ..\src\oc Strings.mod
 
-Dos.om: Dos.mod SYSTEM.om ..\src\oc
+Dos.om: Dos.mod SYSTEM.om ..\src\oc.exe
         ..\src\oc Dos.mod
 
-Crt.om: Crt.mod SYSTEM.om ..\src\oc
+Crt.om: Crt.mod SYSTEM.om ..\src\oc.exe
         ..\src\oc Crt.mod
 
 clean:

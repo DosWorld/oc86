@@ -420,6 +420,16 @@ void cg_deref_far(void) {
     cg_emit_code_str(3, "\x26\x8B\x07"); /* ES: MOV AX,[BX] */
 }
 
+/* Load tag word at ES:[BX-2] (type tag stored 2 bytes before object data) */
+void cg_load_tag_far(void) {
+    cg_emit_code_str(4, "\x26\x8B\x47\xFE"); /* ES: MOV AX,[BX-2] */
+}
+
+/* Store immediate word through ES:[BX]: ES: MOV WORD PTR [BX], imm16 */
+void cg_store_word_esbx_imm(uint16_t val) {
+    cg_emit3(0x26, 0xC7, 0x07); cg_emitw(val); /* ES: MOV [BX], imm16 */
+}
+
 /* Dereference far pointer: byte load — MOV AL, ES:[BX]; zero-extend to AX */
 void cg_deref_far_byte(void) {
     cg_emit_code_str(6, "\x26\x8A\x07\x25\xFF\x00"); /* ES: MOV AL,[BX] / AND AX,00FFh */
@@ -1199,6 +1209,42 @@ void cg_setcc(int jcc) {
     cg_emit2(0x33, 0xC0);
     cg_emit2(0xEB, 3);
     cg_emit1(0xB8); cg_emitw(1);
+}
+
+/* Scan the type descriptor pointed to by AX (DS-relative offset) for tag_id.
+   Input: AX = descriptor offset in DS (from the object's tag word).
+   Output: AX = 1 if tag_id found, 0 if not.
+   Saves/restores SI; all other registers preserved.
+   Code layout (27 bytes):
+     +0  56           PUSH SI
+     +1  89 C6        MOV SI, AX
+     +3  8B 04        MOV AX, [SI]      <-- loop top
+     +5  85 C0        TEST AX, AX
+     +7  74 0A        JZ  false (+10 → +19)
+     +9  3D lo hi     CMP AX, tag_id
+    +12  74 09        JE  true  (+9  → +23)
+    +14  83 C6 02     ADD SI, 2
+    +17  EB F0        JMP loop  (-16 → +3)
+    +19  33 C0        XOR AX, AX  <-- false
+    +21  EB 03        JMP done  (+3  → +26)
+    +23  B8 01 00     MOV AX, 1   <-- true
+    +26  5E           POP SI
+    +27              <-- done */
+void cg_is_tag_scan(int tag_id) {
+    cg_emit1(0x56);                    /* PUSH SI */
+    cg_emit2(0x89, 0xC6);              /* MOV SI, AX */
+    cg_emit2(0x8B, 0x04);              /* MOV AX, [SI]  ← loop top */
+    cg_emit2(0x85, 0xC0);              /* TEST AX, AX */
+    cg_emit2(0x74, 0x0A);              /* JZ  +10 (→ false at +19) */
+    cg_emit1(0x3D); cg_emitw((uint16_t)tag_id); /* CMP AX, tag_id */
+    cg_emit2(0x74, 0x09);              /* JE  +9  (→ true  at +23) */
+    cg_emit3(0x83, 0xC6, 0x02);        /* ADD SI, 2 */
+    cg_emit2(0xEB, 0xF0);              /* JMP -16 (→ loop top at +3) */
+    cg_emit2(0x33, 0xC0);              /* false: XOR AX, AX */
+    cg_emit2(0xEB, 0x03);              /* JMP +3  (→ POP SI at +26) */
+    cg_emit1(0xB8); cg_emitw(0x0001); /* true:  MOV AX, 1 */
+    cg_emit1(0x5E);                    /* POP SI */
+    /* done: */
 }
 
 /* ---- runtime ---- */

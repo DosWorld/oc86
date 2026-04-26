@@ -25,6 +25,7 @@ typedef struct {
     int       is_far;   /* 1 if local exported (FAR) proc: use PUSH CS + CALL NEAR */
     int       sl_hops;  /* >0: uplevel access via static link chain (cg_sl_* helpers) */
     int       typeless; /* 1 if typeless VAR param: slot holds far addr; value IS the addr */
+    void     *fwd_sym;  /* Symbol* when M_PROC and sym->fwd_decl (unresolved FORWARD proc) */
 } Item;
 
 typedef struct {
@@ -166,6 +167,11 @@ void cg_lsl32_cl(void);   /* DX:AX <<= CL (logical, CL masked to 0..31) */
 void cg_lsr32_cl(void);   /* DX:AX >>= CL (logical) */
 void cg_asr32_cl(void);   /* DX:AX >>= CL (arithmetic) */
 void cg_ror32_cl(void);   /* DX:AX rotate right by CL */
+
+/* far pointer helpers */
+void cg_store_word_esbx_imm(uint16_t val); /* ES: MOV WORD PTR [BX], imm16 */
+void cg_load_tag_far(void);                /* AX = ES:[BX-2]  (type tag before object) */
+void cg_is_tag_scan(int tag_id);           /* scan DS:[AX] descriptor for tag_id; AX=0/1 */
 
 /* runtime */
 void cg_new(uint16_t size_bytes, int new_import_id);

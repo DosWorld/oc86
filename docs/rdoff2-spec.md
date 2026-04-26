@@ -15,6 +15,12 @@ The format consists of two distinct file types:
 1.  **RDF (Object File):** Contains code, data, and relocation metadata for a single compilation unit.
 2.  **RDL (Library File):** A container format (archive) holding multiple RDF files.
 
+Command line to produce RDOFF2 object file:
+
+```
+    nasm -f rdf myfile.asm
+```
+
 ---
 
 ## 2. RDF File Structure

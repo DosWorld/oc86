@@ -87,6 +87,14 @@ void parser_syscomment(Scanner *s, char directive, const char *arg) {
         } else {
             fprintf(stderr, "oc: too many $L directives (max %d)\n", PARSER_MAX_EXTRA_RDFS);
         }
+    } else if (directive == 'R') {
+        /* $R+ enable array bounds checks; $R- disable */
+        const char *p = arg;
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == '+')      pe_bounds_check = 1;
+        else if (*p == '-') pe_bounds_check = 0;
+        else fprintf(stderr, "%s(%d): $R directive requires + or -\n",
+                     s->filename, s->line);
     } else {
         fprintf(stderr, "%s(%d): unknown system comment directive '$%c'\n%s\n",
                 s->filename, s->line, directive, s->cur_line);
@@ -95,6 +103,7 @@ void parser_syscomment(Scanner *s, char directive, const char *arg) {
 Scanner *pe_sc;                  /* current scanner, set by parse_module */
 static char cur_mod[NAME_LEN];   /* current module name (set by parse_module) */
 int pe_mod_uses_fpu = 0;         /* shared with pexpr.c via pstate.h */
+int pe_bounds_check = 0;         /* $R+/$R-: 1=emit bounds checks, 0=off (default) */
 
 /* Generic forward-jump backpatch list node — used by RETURN, IF (end jumps),
    CASE (arm-end and body jumps), and anywhere else we need an unbounded list
@@ -117,6 +126,56 @@ static void bp_list_patch_free(BpNode *head) {
 
 /* RETURN statement backpatches: unbounded list reused per procedure */
 static BpNode *ret_patch_list = NULL;
+
+/* Forward-procedure call patch list.
+   Each node records a call site (the offset of the rel16 operand in the code buffer)
+   and whether it was a FAR call (PUSH CS + CALL NEAR) so we can compute the correct
+   patch-at offset.  Stored in sym->fwd_patches (cast to FwdCallNode *). */
+typedef struct FwdCallNode {
+    uint16_t patch_at; /* offset of rel16 word in cg_obj.code */
+    struct FwdCallNode *next;
+} FwdCallNode;
+
+/* Record one unresolved call to a FORWARD-declared procedure.
+   patch_at is the offset of the 2-byte relative displacement in cg_obj.code. */
+static void fwd_add_call(Symbol *sym, uint16_t patch_at) {
+    FwdCallNode *n = (FwdCallNode *)malloc(sizeof(FwdCallNode));
+    if (!n) { pe_error("out of memory"); return; }
+    n->patch_at = patch_at;
+    n->next = (FwdCallNode *)sym->fwd_patches;
+    sym->fwd_patches = n;
+}
+
+/* Patch all recorded call sites to point at target_ofs, then free the list. */
+static void fwd_patch_calls(Symbol *sym, uint16_t target_ofs) {
+    FwdCallNode *n = (FwdCallNode *)sym->fwd_patches;
+    while (n) {
+        FwdCallNode *nx = n->next;
+        /* rel16 = target_ofs - (patch_at + 2) */
+        uint16_t rel = (uint16_t)(target_ofs - (uint16_t)(n->patch_at + 2));
+        cg_obj.code[n->patch_at]     = (uint8_t)(rel & 0xFF);
+        cg_obj.code[n->patch_at + 1] = (uint8_t)(rel >> 8);
+        free(n);
+        n = nx;
+    }
+    sym->fwd_patches = NULL;
+}
+
+/* Emit a call to a forward-declared (unresolved) local procedure and record
+   the patch site.  is_far=1 → PUSH CS + CALL NEAR (like cg_call_local_far). */
+static void fwd_emit_call(Symbol *sym, int is_far) {
+    uint16_t patch_at;
+    if (is_far) cg_emit1(OP_PUSH_CS);
+    cg_emit1(OP_CALL_NEAR);
+    patch_at = cg_pc();
+    cg_emitw(0);   /* placeholder rel16 */
+    fwd_add_call(sym, patch_at);
+}
+
+/* Public wrapper so pexpr.c can emit forward calls (sym is Symbol*, cast via void*). */
+void pe_fwd_emit_call(void *sym, int is_far) {
+    fwd_emit_call((Symbol *)sym, is_far);
+}
 
 /* Ident-list node: accumulates a comma-separated list of identifiers with
    optional export marker (*). Used by VAR, RECORD field, and procedure
@@ -511,9 +570,12 @@ void parse_sysproc_call(int id) {
     switch (id) {
     case SP_NEW: {
         Item ptr; int mAlloc_id;
+        int is_tagged_rec; /* 1 = POINTER TO RECORD → needs type tag */
         parse_designator(&ptr);
         if (ptr.type->form!=TF_POINTER && ptr.type->form!=TF_ADDRESS)
             error("NEW requires pointer or ADDRESS");
+        is_tagged_rec = (ptr.type->form == TF_POINTER && ptr.type->base &&
+                         ptr.type->base->form == TF_RECORD);
         mAlloc_id = get_system_import("SYSTEM_Alloc");
         if (sc->sym==T_COMMA) {
             /* NEW(p, n): n = byte count (always). */
@@ -526,26 +588,39 @@ void parse_sysproc_call(int id) {
             int32_t sz = (ptr.type->form==TF_POINTER) ? ptr.type->base->size : 1;
             cg_load_imm(sz);         /* AX = sizeInBytes */
         }
+        /* For tagged records: allocate size+2 so the tag word fits before the data. */
+        if (is_tagged_rec) cg_emit3(0x83, 0xC0, 0x02);  /* ADD AX, 2 */
         /* Call far SYSTEM_Alloc(sizeInBytes: INTEGER): POINTER
            Pascal convention: Alloc cleans 2 bytes (RETF 2).
            Result: DX:AX = far pointer (offset in AX, segment in DX). */
         cg_emit1(OP_PUSH_AX);       /* push sizeInBytes */
         cg_call_far(mAlloc_id);      /* CALL FAR SYSTEM_Alloc; cleans 2 bytes */
-        /* Result: DX:AX = far pointer; store into ptr variable */
+        /* For tagged records: write descriptor offset at ES:[BX] (the tag slot),
+           then advance AX by 2 so the returned pointer points to the record data. */
+        if (is_tagged_rec) {
+            cg_dxax_to_esbx();                              /* ES:BX = raw block start */
+            cg_store_word_esbx_imm(ptr.type->base->desc_ofs); /* ES:[BX] = desc_ofs */
+            cg_emit2(0x40, 0x40);                           /* INC AX / INC AX  (+2) */
+        }
+        /* Result: DX:AX = far pointer to record data; store into ptr variable */
         cg_store_item(&ptr);
         break;
     }
     case SP_DISPOSE: {
         Item ptr; int mFree_id;
+        int is_tagged_rec;
         parse_designator(&ptr);
         if (ptr.type->form!=TF_POINTER && ptr.type->form!=TF_ADDRESS)
             error("DISPOSE requires pointer or ADDRESS");
+        is_tagged_rec = (ptr.type->form == TF_POINTER && ptr.type->base &&
+                         ptr.type->base->form == TF_RECORD);
         /* Call far SYSTEM_Free(p: POINTER): VOID
            Pascal convention: Free cleans 4 bytes (RETF 4).
            Push far pointer {segment, offset} as 4-byte arg. */
         mFree_id = get_system_import("SYSTEM_Free");
-        /* Load the far pointer value into DX:AX */
         cg_load_item(&ptr);  /* DX:AX = far pointer (ptr type) */
+        /* For tagged records: subtract 2 from offset to get original block start */
+        if (is_tagged_rec) cg_emit3(0x83, 0xE8, 0x02);  /* SUB AX, 2 */
         /* Push as 4-byte arg: segment first (higher address), offset second */
         cg_emit1(OP_PUSH_DX);  /* PUSH DX (segment) */
         cg_emit1(OP_PUSH_AX);  /* PUSH AX (offset)  */
@@ -811,6 +886,7 @@ void parse_statement(TypeDesc *ret_type) {
                 emit_push_static_link(item.val);
             if (item.mode==M_IMPORT && item.is_far) cg_call_far(item.rdoff_id);
             else if (item.mode==M_IMPORT)           cg_call_near(item.rdoff_id);
+            else if (item.fwd_sym)                  fwd_emit_call((Symbol *)item.fwd_sym, item.is_far);
             else if (item.is_far)                   cg_call_local_far((uint16_t)item.adr);
             else                                    cg_call_local((uint16_t)item.adr);
             /* pascal: callee cleaned stack */
@@ -842,6 +918,18 @@ static int32_t parse_array_dim(void) {
         return s->val;
     }
     error("array length expected"); return -2;
+}
+
+/* Emit the type descriptor for a newly created RECORD type into the data
+   segment.  The descriptor is a zero-terminated array of WORDs listing the
+   tag IDs of the type itself and all its ancestors (most-derived first).
+   Sets rec->desc_ofs to the data-segment offset of the array. */
+static void emit_type_descriptor(TypeDesc *rec) {
+    TypeDesc *t;
+    rec->desc_ofs = cg_dpc();
+    for (t = rec; t != NULL; t = t->base)
+        cg_emit_data_word((uint16_t)t->tag_id);
+    cg_emit_data_word(0);  /* sentinel */
 }
 
 /* ================================================================
@@ -944,6 +1032,7 @@ void parse_type(TypeDesc **out) {
             if (sc->sym==T_SEMI) scanner_next(sc);
         }
         expect(T_END);
+        emit_type_descriptor(rec);
         *out = rec;
     } else if (sc->sym==T_POINTER) {
         TypeDesc *ptr_td;
@@ -1062,6 +1151,11 @@ void parse_type_decl(void) {
         t = type_integer; parse_type(&t);
         /* Patch placeholder in-place so any captured pointers see the real type. */
         memcpy(placeholder, t, sizeof(*placeholder));
+        /* Redirect forward-ref entries that point to t (a stub created during
+           parse_type above) to point to placeholder instead, so the resolution
+           loop patches placeholder->base rather than the now-orphaned stub. */
+        for (i = 0; i < n_fwd_refs; i++)
+            if (fwd_refs[i].ptr == t) fwd_refs[i].ptr = placeholder;
         if (sc->sym==T_SEMI) scanner_next(sc);
     }
     /* Resolve forward references: POINTER TO <name> where name was not yet declared. */
@@ -1144,6 +1238,29 @@ void parse_proc_decl(void) {
     scanner_next(sc);  /* consume PROCEDURE */
     if (sc->sym!=T_IDENT) { error("procedure name expected"); return; }
     strncpy(name,sc->id,NAME_LEN-1); scanner_next(sc);
+
+    /* Implementation of a forward-declared procedure:
+       "PROCEDURE name;" with no parameters, no return type, no modifiers. */
+    { Symbol *existing = sym_find_local(name);
+      if (existing && existing->fwd_decl) {
+        /* Consume optional semicolon after name (no params/modifiers allowed) */
+        expect(T_SEMI);
+        sym = existing;
+        pt  = sym->type;
+        exported = sym->exported;
+        /* Open scope and re-insert parameters so the body can reference them */
+        sym_open_scope();
+        for (p = pt->params; p; p = p->next) {
+            s = sym_new(p->name, p->kind);
+            s->type     = p->type;
+            s->adr      = p->adr;
+            s->typeless = p->typeless;
+        }
+        /* Emit the body (same as normal proc below, but we patch forward calls after) */
+        goto emit_body;
+      }
+    }
+
     if (sym_find_local(name)) error("duplicate name");
     sym = sym_new(name, K_PROC);
     exported = 0;
@@ -1207,6 +1324,17 @@ void parse_proc_decl(void) {
         pt->is_far = 0;
         scanner_next(sc);
         expect(T_SEMI);
+    }
+
+    /* FORWARD modifier: declaration only; body must follow later in the same DeclSeq.
+       INLINE and EXTERNAL procs may not be FORWARD. */
+    if (sc->sym == T_IDENT && strcmp(sc->id, "FORWARD") == 0) {
+        scanner_next(sc);
+        expect(T_SEMI);
+        type_calc_arg_size(pt);
+        sym->fwd_decl = 1;
+        sym_close_scope();
+        return;
     }
 
     /* EXTERNAL modifier: no body; implementation in external .rdf file */
@@ -1281,6 +1409,7 @@ void parse_proc_decl(void) {
         return;
     }
 
+    emit_body:
     type_calc_arg_size(pt);
 
     /* copy BP offsets from pt->params into scope symbols.
@@ -1349,6 +1478,12 @@ void parse_proc_decl(void) {
     cur_prologue_patch = saved_prologue_patch;
     cur_proc_depth = saved_proc_depth;
     } /* end of saved-context block */
+
+    /* Patch all call sites that referenced this FORWARD-declared procedure */
+    if (sym->fwd_decl) {
+        fwd_patch_calls(sym, (uint16_t)sym->code_ofs);
+        sym->fwd_decl = 0;
+    }
 
     expect(T_SEMI);
 }
@@ -1469,6 +1604,17 @@ void parse_module(Scanner *s) {
     }
 
     parse_decl_seq();
+
+    /* Check for unresolved FORWARD declarations */
+    { Symbol *sym;
+      for (sym = top_scope->symbols; sym; sym = sym->next) {
+          if (sym->kind == K_PROC && sym->fwd_decl) {
+              fprintf(stderr, "%s: unresolved FORWARD procedure '%s'\n",
+                      s->filename, sym->name);
+              parser_errors++;
+          }
+      }
+    }
 
     /* validate -entry proc: must exist at module level, be K_PROC, and be exported */
     if (parser_entry_proc && parser_errors == 0) {

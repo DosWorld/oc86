@@ -48,6 +48,38 @@ static void const_fold_int(Item *item, Token op, const Item *rhs) {
 }
 
 /* ================================================================
+   ARRAY BOUNDS CHECK
+   ================================================================ */
+/* Emit runtime bounds check. AX = index on entry; AX preserved on exit.
+   len >= 0: fixed-size upper bound.
+   len < 0: open-array; upper bound is WORD at [BP + open_len_bp_ofs].
+   On out-of-bounds: calls SYSTEM_ErrIndexOutOfBounds (no args, FAR). */
+static void emit_bounds_check(int32_t len, int32_t open_len_bp_ofs) {
+    int err_id;
+    Backpatch ok1, ok2;
+    if (!pe_bounds_check) return;
+    err_id = pe_get_system_import("SYSTEM_ErrIndexOutOfBounds");
+    if (len < 0) {
+        cg_emit1(0x50);                    /* PUSH AX (save index) */
+        cg_load_bp(open_len_bp_ofs);       /* AX = LEN */
+        cg_emit2(0x89, 0xC1);              /* MOV CX, AX */
+        cg_emit1(0x58);                    /* POP AX (restore index) */
+    }
+    cg_test_ax();
+    cg_cond_near(OP_JGE, &ok1);            /* skip call if AX >= 0 */
+    cg_call_far(err_id);
+    cg_patch_near(&ok1);
+    if (len >= 0) {
+        cg_emit1(0x3D); cg_emitw((uint16_t)len); /* CMP AX, imm16 */
+    } else {
+        cg_emit2(0x3B, 0xC1);              /* CMP AX, CX */
+    }
+    cg_cond_near(OP_JL, &ok2);             /* skip call if AX < len */
+    cg_call_far(err_id);
+    cg_patch_near(&ok2);
+}
+
+/* ================================================================
    DESIGNATOR
    ================================================================ */
 void parse_designator(Item *item) {
@@ -64,6 +96,7 @@ void parse_designator(Item *item) {
     item->sl_hops = 0;
     item->typeless = 0;
     item->rdoff_id = sym->rdoff_id;
+    item->fwd_sym  = NULL;
 
     switch (sym->kind) {
     case K_CONST:
@@ -105,6 +138,7 @@ void parse_designator(Item *item) {
                         item->adr     = sym->code_ofs;
                         item->is_far  = sym->type ? sym->type->is_far : sym->exported;
                         item->val     = sym->level;
+                        item->fwd_sym = sym->fwd_decl ? sym : NULL;
                     }
                     break;
     case K_IMPORT:
@@ -181,6 +215,7 @@ void parse_designator(Item *item) {
                     item->rdoff_id = -1;
                     item->adr     = 0;  /* no code address */
                     item->val     = 0;  /* level (not nested) */
+                    item->fwd_sym = NULL;
                     continue;
                 }
 
@@ -238,6 +273,7 @@ void parse_designator(Item *item) {
         } else if (pe_sc->sym == T_LBRAK) {
             TypeDesc *elem;
             Item idx;
+            int was_const;
             scanner_next(pe_sc);
             /* Oberon-07: p[i] is shorthand for p^[i] when p is a pointer */
             if (item->type->form == TF_POINTER) {
@@ -257,7 +293,12 @@ void parse_designator(Item *item) {
                    compute index offset in AX, then ADD BX, AX */
                 cg_emit1(OP_PUSH_BX);               /* save base offset */
                 parse_expr(&idx);
+                was_const = (idx.mode == M_CONST);
+                if (pe_bounds_check && was_const)
+                    if (idx.val < 0 || (item->type->len >= 0 && idx.val >= item->type->len))
+                        pe_error("array index out of bounds");
                 cg_load_item(&idx);                 /* AX = index */
+                if (!was_const && item->type->len >= 0) emit_bounds_check(item->type->len, 0);
                 if (elem->size == 2)      { cg_emit1(0xD1); cg_emit1(0xE0); } /* SHL AX,1 */
                 else if (elem->size > 2)  { cg_load_imm_cx(elem->size); cg_mul(); }
                 /* AX = byte offset; POP CX = saved base; BX = base+offset */
@@ -291,7 +332,14 @@ void parse_designator(Item *item) {
                 }
                 /* ES:BX = base of array; add index byte-offset */
                 parse_expr(&idx);
+                was_const = (idx.mode == M_CONST);
+                if (pe_bounds_check && was_const) {
+                    if (idx.val < 0) pe_error("array index out of bounds");
+                    if (item->type->len >= 0 && idx.val >= item->type->len)
+                        pe_error("array index out of bounds");
+                }
                 cg_load_item(&idx);
+                if (!was_const) emit_bounds_check(item->type->len, (int32_t)(item->adr + 4));
                 if (elem->size == 2)      { cg_emit1(0xD1); cg_emit1(0xE0); }
                 else if (elem->size > 2)  { cg_load_imm_cx(elem->size); cg_mul(); }
                 cg_emit2(0x01, 0xC3);               /* ADD BX, AX  (BX = base+index) */
@@ -305,14 +353,28 @@ void parse_designator(Item *item) {
                 elem = item->type->elem;
                 if (item->mode == M_REG && item->is_ref) {
                     cg_emit1(OP_PUSH_BX);
-                    parse_expr(&idx); cg_load_item(&idx);
+                    parse_expr(&idx);
+                    was_const = (idx.mode == M_CONST);
+                    if (pe_bounds_check && was_const)
+                        if (idx.val < 0 || (item->type->len >= 0 && idx.val >= item->type->len))
+                            pe_error("array index out of bounds");
+                    cg_load_item(&idx);
+                    if (!was_const && item->type->len >= 0) emit_bounds_check(item->type->len, 0);
                     if (elem->size == 2)     { cg_emit1(0xD1); cg_emit1(0xE0); }
                     else if (elem->size > 2) { cg_load_imm_cx(elem->size); cg_mul(); }
                     cg_emit1(OP_POP_CX);
                     cg_emit2(0x03, 0xC1);
                     cg_emit2(0x8B, 0xD8);
                 } else {
-                    parse_expr(&idx); cg_load_item(&idx);
+                    parse_expr(&idx);
+                    was_const = (idx.mode == M_CONST);
+                    if (pe_bounds_check && was_const) {
+                        if (idx.val < 0) pe_error("array index out of bounds");
+                        if (item->type->len >= 0 && idx.val >= item->type->len)
+                            pe_error("array index out of bounds");
+                    }
+                    cg_load_item(&idx);
+                    if (!was_const && item->type->len >= 0) emit_bounds_check(item->type->len, 0);
                     if (elem->size == 2)     { cg_emit1(0xD1); cg_emit1(0xE0); }
                     else if (elem->size > 2) { cg_load_imm_cx(elem->size); cg_mul(); }
                     cg_emit2(0x01, 0xC3);
@@ -547,6 +609,7 @@ static void parse_factor(Item *item) {
     item->is_ref = 0;
     item->is_far = 0;
     item->sl_hops = 0;
+    item->fwd_sym = NULL;
     switch (pe_sc->sym) {
     case T_INT:
         item->mode = M_CONST; item->val  = pe_sc->ival;
@@ -885,6 +948,7 @@ static void parse_factor(Item *item) {
                     pe_emit_push_static_link(item->val);
                 if (is_import && item->is_far) cg_call_far(rdoff_id);
                 else if (is_import)          cg_call_near(rdoff_id);
+                else if (item->fwd_sym)      pe_fwd_emit_call(item->fwd_sym, item->is_far);
                 else if (item->is_far)       cg_call_local_far(code_ofs);
                 else                         cg_call_local(code_ofs);
                 item->type = pt->ret_type;
@@ -1398,6 +1462,57 @@ void parse_expr(Item *item) {
         cg_emit2(0x85, 0xC3);                      /* TEST AX, BX */
         cg_setcc(OP_JNZ);
         item->type=type_boolean; item->mode=M_REG;
+    } else if (pe_sc->sym == T_IS) {
+        /* v IS T: type test. LHS must be POINTER TO RECORD; RHS a RECORD type name.
+           If LHS static type already extends RHS → compile-time TRUE.
+           If types are unrelated → compile-time FALSE.
+           Otherwise (RHS extends LHS) → runtime check via tag descriptor. */
+        TypeDesc *lhs_rec, *rhs_rec;
+        Symbol *tsym;
+        scanner_next(pe_sc);
+        if (!item->type || (item->type->form != TF_POINTER && item->type->form != TF_ADDRESS)) {
+            pe_error("IS: left operand must be a POINTER");
+            item->type=type_boolean; item->mode=M_CONST; item->val=0;
+            return;
+        }
+        lhs_rec = (item->type->form == TF_POINTER) ? item->type->base : NULL;
+        if (pe_sc->sym != T_IDENT) {
+            pe_error("IS: right operand must be a type name");
+            item->type=type_boolean; item->mode=M_CONST; item->val=0;
+            return;
+        }
+        tsym = sym_find(pe_sc->id);
+        scanner_next(pe_sc);
+        if (!tsym || tsym->kind != K_TYPE || !tsym->type) {
+            pe_error("IS: right operand must be a type name");
+            item->type=type_boolean; item->mode=M_CONST; item->val=0;
+            return;
+        }
+        rhs_rec = tsym->type;
+        if (rhs_rec->form == TF_POINTER) rhs_rec = rhs_rec->base;
+        if (!rhs_rec || rhs_rec->form != TF_RECORD) {
+            pe_error("IS: right operand must be a RECORD type");
+            item->type=type_boolean; item->mode=M_CONST; item->val=0;
+            return;
+        }
+        if (!lhs_rec || lhs_rec->form != TF_RECORD) {
+            pe_error("IS: left pointer must point to a RECORD type");
+            item->type=type_boolean; item->mode=M_CONST; item->val=0;
+            return;
+        }
+        if (type_is_extension(lhs_rec, rhs_rec)) {
+            cg_load_imm(1);  /* static type already extends RHS → always TRUE */
+        } else if (!type_is_extension(rhs_rec, lhs_rec)) {
+            cg_load_imm(0);  /* unrelated types → always FALSE */
+        } else {
+            /* Runtime: load pointer into ES:BX, read tag descriptor offset,
+               scan descriptor for rhs_rec->tag_id. */
+            cg_load_item(item);              /* DX:AX = far pointer (points to data) */
+            cg_dxax_to_esbx();               /* ES:BX = object data */
+            cg_load_tag_far();               /* AX = ES:[BX-2] = tag descriptor offset */
+            cg_is_tag_scan(rhs_rec->tag_id); /* AX = 0 or 1 */
+        }
+        item->type=type_boolean; item->mode=M_REG;
     }
 }
 /* ================================================================
@@ -1499,6 +1614,43 @@ static void parse_system_intrinsic(Item *item, int id) {
                 case SP_ASR: cg_sar_cl(); break;
                 default:     cg_ror_cl(); break;
                 }
+            }
+        }
+        item->type = is_long ? type_longint : type_integer;
+        item->mode = M_REG;
+        break;
+    }
+
+    case SP_AND:
+    case SP_IOR:
+    case SP_XOR: {
+        /* SYSTEM.AND/IOR/XOR(x, y) -> bitwise op, same width as widest arg.
+           BYTE or INTEGER: 16-bit AX op CX -> AX.
+           LONGINT: 32-bit DX:AX op CX:BX -> DX:AX. */
+        Item x_item;
+        int is_long;
+        parse_expr(&x_item);
+        is_long = (x_item.type && x_item.type->form == TF_LONGINT);
+        cg_load_item(&x_item);
+        if (is_long) { cg_push_dxax(); } else { cg_emit1(OP_PUSH_AX); }
+        pe_expect(T_COMMA);
+        parse_expr(&arg);
+        if (!is_long && arg.type && arg.type->form == TF_LONGINT) is_long = 1;
+        cg_load_item(&arg);
+        if (is_long) {
+            cg_pop_cxbx();
+            switch (id) {
+            case SP_AND: cg_and32(); break;
+            case SP_IOR: cg_or32();  break;
+            default:     cg_xor32(); break;
+            }
+        } else {
+            cg_emit2(0x89, 0xC1); /* MOV CX, AX */
+            cg_emit1(OP_POP_AX);
+            switch (id) {
+            case SP_AND: cg_and(); break;
+            case SP_IOR: cg_or();  break;
+            default:     cg_xor(); break;
             }
         }
         item->type = is_long ? type_longint : type_integer;
