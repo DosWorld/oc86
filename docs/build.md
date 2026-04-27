@@ -112,8 +112,7 @@ is stored in the archive under its basename (directory part is stripped).  Up to
 Typical use: when the SYSTEM library is split into multiple `.rdf` files (e.g. hand-assembled
 helpers like `SYS.RDF`), list them with `$L` so the resulting `.om` is self-contained.
 
-If a `$L` path cannot be opened, a warning is printed to stderr and the `.om` is still
-written with all successfully read extra files.
+If a `$L` path cannot be opened or read, the compiler reports an error and compilation fails.
 
 ### Set stack size hint
 
@@ -124,12 +123,12 @@ Use the `$M` system comment directive to declare the required stack size (in byt
 //$M 32768             (* line-comment form *)
 ```
 
-The directive may appear anywhere in the source (before or after `MODULE`).  The value must
-be a positive decimal integer (treated as a LONGINT byte count).  When the module is compiled
+The directive may appear anywhere in the source (before or after `MODULE`).  The value is
+interpreted as a positive decimal integer (LONGINT byte count).  When the module is compiled
 with `-entry`, the value is written as a plain decimal text file `META-INF/STACK.TXT` inside
 the `.om` archive.  If multiple `$M` directives appear, the last one wins.  The directive is
 silently ignored (no file written) when compiling without `-entry`.  An invalid value (zero or
-non-numeric) produces a warning on stderr.
+non-numeric) is a fatal compile error and the compiler exits with a non-zero status.
 
 The linker (`olink`) reads `META-INF/STACK.TXT` from the entry `.om` (if present) to override
 the default stack size of 8192 bytes.  Valid range: 2–65536.  Invalid or absent → default.
@@ -158,7 +157,7 @@ export OBERON_LIB=/path/to/lib          # Unix — single lib/ directory after i
 set OBERON_LIB=C:\lib                   # DOS
 ```
 
-After `make` from the root, `lib/` contains `SYSTEM.om`, `Out.om`, `Out87.om`, `In.om`, `Strings.om`, `Files.om`, `Crt.om`, `Dos.om`, `IO.om`, `Mem.om`, and `SYSTEM.DEF`.
+After `make` from the root, `lib/` contains `SYSTEM.om`, `Out.om`, `Out87.om`, `In.om`, `Strings.om`, `Files.om`, `Crt.om`, `Dos.om`, `IO.om`, and `Mem.om`.
 Set `OBERON_LIB=lib` (or the absolute path) so `oc` can resolve imports.
 Library search order: current directory → OBERON_LIB entries (left to right).
 

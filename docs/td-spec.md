@@ -120,13 +120,66 @@ Index 0 means "no name" (null pointer).
 
 ###  Source File Entries (6 bytes each)
 
-    Raw opaque bytes. Typically used to map line numbers to files.
-    Not detailed here; they can be skipped or displayed as hex.
+Each record maps a range of code addresses to a particular source file.
+This allows the debugger to display the correct source file for a given
+instruction pointer.
+
+typedef struct {
+    uint16_t segment;            // code/data segment number
+    uint16_t start_offset;       // starting offset within the segment
+    uint16_t file_name_index;    // 1-based index into the string pool
+} SOURCE_FILE_RECORD;
+
+Fields:
+  - segment:        The 16-bit segment value (absolute segment, as loaded).
+                    Together with start_offset, forms the first address
+                    covered by this file.
+  - start_offset:   Offset within the segment from which this source file
+                    becomes active.  The range extends until the next
+                    SOURCE_FILE_RECORD for the same segment, or the end
+                    of the segment if this is the last.
+  - file_name_index:  Index of the null-terminated source file name in
+                    the string pool (1-based).  Use the string pool
+                    extraction method to obtain the full path or file name.
+
+Multiple records for the same segment define contiguous sub-ranges; they
+are sorted by (segment, start_offset).  The debugger uses these ranges
+together with LINE_NUMBER_RECORDs to map any code address to
+(file, line number).
 
 ### Line Number Entries (4 bytes each)
 
-    Raw opaque bytes. Usually encode (segment, offset) and (line number).
-    Skipped in this specification.
+These map individual code offsets to source line numbers within the
+currently active source file (as defined by the SOURCE_FILE_RECORDs).
+
+typedef struct {
+    uint16_t offset;             // code offset inside the segment
+    uint16_t line_number;        // source line number (1-based)
+} LINE_NUMBER_RECORD;
+
+Fields:
+  - offset:         Offset inside the segment (the same segment as the
+                    enclosing SOURCE_FILE_RECORD).  It represents the
+                    address of the first instruction that corresponds to
+                    the specified line.
+  - line_number:    The original source line number (1‑based).
+
+Line number records are expected to be sorted by offset within each
+segment/source-file range.  For a given code address, the debugger
+finds the corresponding source file record for that segment, then
+searches the line number records within the range to locate the nearest
+offset ≤ the current IP.  The line_number of that record is the source
+line to display.
+
+If a segment contains code not covered by any line number record (e.g.,
+generated startup code), no source position is displayed.
+
+Note: In the TDINFO block, SOURCE_FILE_RECORDs and LINE_NUMBER_RECORDs
+      are stored globally, interleaving multiple segments.  It is the
+      job of the debugger to associate them by segment.  The segment
+      records (SEGMENT_RECORD) and scope records provide additional
+      structural information, but source-file and line-number records
+      are resolved purely by their own segment/offset fields.
 
 ### SCOPE_RECORD (12 bytes)
 
@@ -153,7 +206,54 @@ Index 0 means "no name" (null pointer).
 
 ### Correlation Entries (8 bytes each)
 
-    Raw opaque bytes. Skipped.
+Correlation entries provide explicit mappings between different debug
+sections, primarily linking source files, line numbers, and segments.
+They allow the debugger to quickly determine which source file and
+module are associated with a given code segment, even when such
+relationships are not directly encoded in the SOURCE_FILE_RECORDs
+or SEGMENT_RECORDs.
+
+While the exact structure is not fully documented in Borland's public
+manuals, extensive reverse-engineering has identified the following
+probable layout:
+
+typedef struct {
+    uint16_t source_file_index;   // 1-based index of a SOURCE_FILE_RECORD
+    uint16_t segment_index;       // 1-based index of a SEGMENT_RECORD
+    uint16_t module_index;        // 1-based index of a MODULE_RECORD
+    uint16_t flags_or_reserved;   // possibly flags, often 0x0000
+} CORRELATION_RECORD;
+
+Fields (interpretation based on field usage in practice):
+  - source_file_index:  Points to the SOURCE_FILE_RECORD that defines
+                        the file name and address range for this mapping.
+  - segment_index:      Points to the SEGMENT_RECORD that describes the
+                        code segment to which this correlation applies.
+  - module_index:       Points to the MODULE_RECORD (usually a single
+                        object-file name) that contributed this code.
+  - flags_or_reserved:  In most observed files this field is zero.
+                        It may have been reserved for future use or
+                        encode additional properties (e.g., whether
+                        the correlation is active).
+
+All three index fields are 1‑based; a value of 0 means “not used” or
+“default”. The records are stored in the array exactly as encountered
+in the file, in the order generated by the linker. They are not
+guaranteed to be sorted.
+
+Purpose:
+  By combining correlation entries with source-file and segment records,
+  a debugger can reconstruct the complete mapping:
+    segment + offset  →  source file + module  →  source line
+  This is especially helpful when multiple object files are linked
+  into a single segment, or when the same source file contributes
+  code to several segments.
+
+If the exact structure above cannot be validated for a particular
+executable, it is safe to treat the 8‑byte entries as opaque and
+skip them; the remaining debug information (SOURCE_FILE_RECORDs and
+LINE_NUMBER_RECORDs) is sufficient to resolve source positions
+without explicit correlation records.
 
 ### TYPE_RECORD (8 bytes)
 

@@ -13,14 +13,16 @@ Key features
 - LONGINT (32-bit signed integers) with helpers for multiplication, division, and modulus.
 - SET type (16-bit): literals, ranges, set operators (+, -, *, /), IN membership test, and IS compile-time type test.
 - Constant expression folding for CONST declarations.
+- Constant folding accepts imported constants (qualified imports). Imported consts can be used in ARRAY dimensions, CASE labels and in other CONST definitions (folding and nested CONST expressions supported). Unit/integration tests added: tests/ImportConstA.Mod, tests/ImportConstB.Mod, and tests/TestIsInstance.Mod.
 - FAR/NEAR procedure calling conventions with procedural variables.
 - Nested procedures with full static-link uplevel variable access (up to 3 hops).
 - Dynamic allocation: NEW/DISPOSE with typed and sized variants; ADDRESS far pointers.
 - Forward and self-referential POINTER TO RECORD types within a TYPE section.
-- SYSTEM intrinsics: GET, PUT, MOVE, FILL, ADR, SEG, OFS, VAL, PTR, LSL, LSR, ASR, ROR.
+- SYSTEM intrinsics: GET, PUT, MOVE, FILL, ADR, SEG, OFS, VAL, PTR, LSL, LSR, ASR, ROR, PORTOUT, PORTIN.
 - EXTERNAL procedure declarations (body provided by an external .rdf at link time).
 - $L directive to pack hand-assembled .rdf files into .om archives.
 - $M directive to declare stack size; stored as `META-INF/STACK.TXT` in the `.om` when using `-entry`.
+- $R directive to enable/disable array bounds checking (calls `SYSTEM_ErrIndexOutOfBounds` on violation).
 - Import namespace isolation: imported symbols keyed as `alias.name` to prevent collisions.
 - Unbounded linked-list accumulator lists — no silent truncation on large modules.
 
@@ -28,6 +30,8 @@ Language extensions (vs. standard Oberon-07)
 ---------------------------------------------
 - `//` single-line comments.
 - `(*$L path.rdf*)` / `//$L path.rdf` system comment to include extra .rdf in .om.
+- `(*$M size*)` stack size hint; writes `META-INF/STACK.TXT` to `.om`.
+- `(*$R+*)` / `(*$R-*)` enable/disable array bounds checks.
 - `FAR` / `NEAR` context-sensitive modifiers on PROCEDURE declarations and types.
 - `EXTERNAL` modifier on PROCEDURE declarations (no body; resolved at link time).
 - `VAR name` without `: type` (typeless VAR, Turbo-Pascal style) — callee receives ADDRESS.
@@ -42,8 +46,6 @@ Language extensions (vs. standard Oberon-07)
 
 Standard features that are NOT implemented
 -------------------------------------------
-- `IS` runtime type test (compile-time fold implemented; runtime requires type tags not yet emitted).
-- Array bounds checking.
 - Mutual recursion via non-pointer fields across a TYPE section (requires two-pass scanner).
 
 Directory layout
@@ -55,6 +57,7 @@ oberonc/
   lib/          Compiled library output (built by src-lib/Makefile install)
   tests/        Unit test sources (.c) and integration test modules (.Mod)
   docs/         Grammar, ABI, build and linker reference
+  src-ob/       Self-hosted compiler and linker in progress (Oberon sources)
   CLAUDE.md     Developer guide for Claude Code sessions
   MANUAL.MD     Programmer manual: dialect, ABI, calling conventions, open arrays
 ```
@@ -85,7 +88,7 @@ Build:
 
 ```sh
 make            # build oc and olink, compile and install all libraries to lib/
-make test       # full clean + rebuild + run all 715 tests
+make test       # full clean + rebuild + run all 825 tests
 ```
 
 Build for DOS (Open Watcom):
@@ -144,7 +147,7 @@ DOS real-mode large model: CS≠DS≠SS. The linker places all modules' data in 
 
 Test suite
 ----------
-715 tests across 8 suites:
+825 tests across 8 suites:
 
 | Suite                       | Count | What it covers |
 |-----------------------------|-------|----------------|
@@ -153,9 +156,9 @@ Test suite
 | test_codegen.c (unit)       | 123   | Exact byte sequences for every codegen path |
 | test_rdoff.c (unit)         | 76    | RDOFF2 binary format (IMPORT/GLOBAL/RELOC) |
 | test_tar.c (unit)           | 26    | ustar archive writer |
-| test_def.c (unit)           | 28    | .def writer / reader round-trip |
-| test_src.sh (integration)   | 288   | Compile, link, RDOFF structure, error messages |
-| test_system_intrinsics.sh   | 26    | SYSTEM intrinsic runtime behaviour |
+| test_def.c (unit)           | 88    | .def writer / reader round-trip |
+| test_src.sh (integration)   | 336   | Compile, link, RDOFF structure, error messages |
+| test_system_intrinsics.sh   | 28    | SYSTEM intrinsic runtime behaviour |
 
 Executable integration tests (sections 17–55 in test_src.sh) compile Oberon modules with `-entry RunAllTests`, link them, and run them under `xt`. If `xt` is not in PATH those tests are skipped (not failed).
 

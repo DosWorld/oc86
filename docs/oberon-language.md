@@ -1,6 +1,6 @@
 # Oberon-07 Language — Compiler Rules
 
-Rules for how Oberon-07 source is compiled to 8086 machine code.
+Rules for how Oberon-07 source is compiled to 8086/8087 machine code.
 See also: [Implementation rules](implementation-rules.md), [RDOFF2 spec](rdoff2-spec.md).
 
 ---
@@ -285,6 +285,14 @@ MOV AX, [BP+adr+4]   ; read hidden LEN word
 ```
 
 **`LEN(arr)` for fixed-size array**: compile-time constant `type->len` — `MOV AX, imm16`.
+
+### Constant folding and imported constants
+
+- Constant folding is performed at compile time for constant expressions used in CONST declarations, array dimension expressions (`ARRAY N OF T`), and CASE label values. Supported operators include `+`, `-`, `*`, `DIV`, and `MOD` with Oberon-07 floor-division semantics.
+- Qualified imported constants (Alias.Const) loaded from `.def` files are treated as compile-time constants and participate in constant folding. Examples: `CONST C = I.N + 1;`, `VAR a: ARRAY I.N OF INTEGER;`, and `CASE I.N OF ...` — all are accepted and folded when `I` is an imported module.
+- Non-integer constants used where an integer constant is required (e.g., array dimension) produce a compile-time error.
+- Large integer results are promoted to `LONGINT` when they exceed 16-bit range; folded values carry appropriate type (`INTEGER` or `LONGINT`).
+
 
 **Array element access** (`arr[i]`):
 - Open-array formal: `LES BX,[BP+adr]` loads far ptr; then `ADD BX, AX` (index×elemsize).
@@ -931,6 +939,8 @@ pushes `{segment, offset}` = 4 bytes; the INLINE byte pattern then POPs them.
 | `SYSTEM.PUT(a, x)` | `a: ADDRESS; x: INTEGER` | `58 5B 07 26 89 07` | Write word `x` to far pointer `a` |
 | `SYSTEM.MOVE(src, dst, n)` | `VAR src, dst; n: INTEGER` | `59 5F 07 5E 58 1E 8E D8 FC F3 A4 1F` | Copy `n` bytes from `src` to `dst` |
 | `SYSTEM.FILL(dst, n, b)` | `VAR dst; n: INTEGER; b: BYTE` | `58 59 5F 07 FC F3 AA` | Fill `n` bytes at `dst` with byte `b` |
+| `SYSTEM.PORTOUT(p, b)` | `p: INTEGER; b: BYTE` | `58 5A EE` | Write byte `b` to port `p` (OUT DX, AL) |
+| `SYSTEM.PORTIN(p, v)` | `p: INTEGER; VAR v: BYTE` | `58 5B 5A EC 26 88 07` | Read byte from port `p` into `v` (IN AL, DX) |
 
 Invariants: `ADR(n^) = n`; `SEG(n^) = SEG(n)`; `OFS(n^) = OFS(n)`; `ADR(v) = PTR(SEG(v), OFS(v))`.
 

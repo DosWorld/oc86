@@ -79,6 +79,57 @@ Do **not** over-widen: use the narrowest correct type.
 
 ---
 
+## Constant folding helper (recommended)
+
+When implementing compile-time constant folding, provide a single reusable helper in
+pexpr.c so all compiler subsystems use a consistent routine and behaviour.
+
+Design notes (recommended):
+
+- Location: implement the helper in `src/pexpr.c` and declare it in `src/pexpr.h` so
+  `parser.c`, `pexpr.c`, and other modules can call it.
+
+- Prototype (suggested):
+
+  /* Try to fold the expression represented by the parser state `pe_sc` at the
+     current token position `start`..`end`. On success return 1 and set `out_type`
+     and `out_value`. On failure return 0. */
+  int pe_const_fold(Scanner *sc, const char *start, const char *end,
+                    int *out_type, long *out_int, double *out_real, char *out_str);
+
+  (Choose a representation that matches existing expression/value helpers in
+   `pexpr.c` — the important part is a single canonical API.)
+
+- Behaviour:
+  - Fold integer arithmetic, unary `-`, `+`, DIV/MOD, boolean ops, and casts where
+    operand types permit constant evaluation.
+  - Perform constant propagation for `IS` type-tests when statically decidable.
+  - Return typed result (INTEGER, REAL, CHAR, BOOLEAN) and a clear failure mode
+    when folding is not possible (e.g., runtime-dependent variables, procedure calls,
+    or operations requiring FPU when not available).
+  - Preserve compiler error reporting semantics: when a constant expression is
+    required and folding fails, produce the same diagnostic as existing code paths.
+
+- Call-sites (use the helper everywhere a compile-time constant is needed):
+  - `CONST` declarations (evaluate RHS)
+  - Array dimension expressions (ARRAY N OF T)
+  - CASE label constants
+  - $M, $L, and other compiler-directive validations that accept constant expressions
+  - Any location where existing ad-hoc folding logic is present — replace ad-hoc
+    code with calls to `pe_const_fold` to ensure a single behaviour.
+
+- Tests:
+  - Add unit tests exercising `pe_const_fold` behaviour (simple integer/real
+    arithmetic, casts, DIV/MOD edge cases, fold failure cases).
+  - Update `tests/test_scanner.c` / `tests/test_pexpr.c` to call the helper via a
+    thin wrapper, or add new C unit tests that directly invoke it.
+
+Rationale: centralising constant folding reduces duplicated logic, makes bug
+fixes and behaviour changes single-point edits, and ensures consistent
+diagnostics when folding fails or overflows.
+
+---
+
 ## DOS memory model constraints  ← CRITICAL
 
 The compiler runs as a real-mode DOS application.

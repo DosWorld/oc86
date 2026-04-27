@@ -172,6 +172,7 @@ void cg_ror32_cl(void);   /* DX:AX rotate right by CL */
 void cg_store_word_esbx_imm(uint16_t val); /* ES: MOV WORD PTR [BX], imm16 */
 void cg_load_tag_far(void);                /* AX = ES:[BX-2]  (type tag before object) */
 void cg_is_tag_scan(int tag_id);           /* scan DS:[AX] descriptor for tag_id; AX=0/1 */
+void cg_is_tag_check(Item *item, int tag_id); /* load item, convert to ES:BX, load tag, scan */
 
 /* runtime */
 void cg_new(uint16_t size_bytes, int new_import_id);

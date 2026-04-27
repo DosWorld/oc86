@@ -89,7 +89,6 @@ PROCEDURE PORTOUT*(port : INTEGER; b: BYTE);
 PROCEDURE PORTIN*(port : INTEGER) : BYTE;
   INLINE(05AH,0ECH);
 
-
 PROCEDURE Message(msg : ARRAY OF CHAR);
 VAR
     r : Registers;
@@ -100,17 +99,32 @@ BEGIN
     Intr(21H, r);
 END Message;
 
-PROCEDURE Error(msg : ARRAY OF CHAR);
+PROCEDURE Error(errCode : INTEGER; msg : ARRAY OF CHAR);
 BEGIN
-    Message("Run-time error: $");
+    Message("Run-time error $");
     Message(msg);
-    Halt(2)
+    Halt(errCode)
 END Error;
+
+PROCEDURE ErrDivisionByZero*;
+BEGIN
+    Error(200, "200: Division by zero$");
+END ErrDivisionByZero;
 
 PROCEDURE ErrIndexOutOfBounds*;
 BEGIN
-    Error("Array index out of bounds$");
+    Error(201, "201: Array index out of bounds$");
 END ErrIndexOutOfBounds;
+
+PROCEDURE ErrStackOverflow*;
+BEGIN
+    Error(202, "202: Stack overflow$");
+END ErrStackOverflow;
+
+PROCEDURE ErrInvalidPointerOperation*;
+BEGIN
+    Error(204, "204: Invalid pointer operation$");
+END ErrInvalidPointerOperation;
 
 (*$L SYS.RDF*)
 

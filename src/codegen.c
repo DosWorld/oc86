@@ -1247,6 +1247,16 @@ void cg_is_tag_scan(int tag_id) {
     /* done: */
 }
 
+/* Convenience helper: perform full IS runtime emission
+   (load item pointer, convert DX:AX → ES:BX, load tag word, scan descriptor).
+   On exit: AX = 0/1 (false/true). */
+void cg_is_tag_check(Item *item, int tag_id) {
+    cg_load_item(item);              /* DX:AX = far pointer (points to data) */
+    cg_dxax_to_esbx();               /* ES:BX = object data */
+    cg_load_tag_far();               /* AX = ES:[BX-2] = tag descriptor offset */
+    cg_is_tag_scan(tag_id);          /* AX = 0 or 1 */
+}
+
 /* ---- runtime ---- */
 void cg_new(uint16_t size_bytes, int new_import_id) {
     cg_load_imm(size_bytes);

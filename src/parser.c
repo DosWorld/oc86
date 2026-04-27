@@ -44,61 +44,149 @@ static int read_file_to_buf(const char *path, uint8_t **out_buf, long *out_len) 
     return 0;
 }
 
-void parser_syscomment(Scanner *s, char directive, const char *arg) {
-    if (directive == 'M') {
-        /* $M stack_size — stack size hint (LONGINT); stored in META-INF/STACK.TXT
-           when compiling with -entry.  Only the last $M wins. */
-        long val = 0;
-        const char *p = arg;
-        while (*p == ' ' || *p == '\t') p++;
-        if (*p >= '0' && *p <= '9') {
-            val = 0;
-            while (*p >= '0' && *p <= '9') { val = val * 10 + (*p - '0'); p++; }
-        }
-        if (val <= 0) {
+static void trim_space(const char **startp, const char **endp) {
+    const char *s = *startp, *e = *endp;
+    while (s < e && (*s == ' ' || *s == '\t' || *s == '\r' || *s == '\n')) s++;
+    while (e > s && (e[-1] == ' ' || e[-1] == '\t' || e[-1] == '\r' || e[-1] == '\n')) e--;
+    *startp = s; *endp = e;
+}
+
+/* Process a single directive token: dir = 'A'..'Z', val points to value substring (NUL-terminated)
+   On value-format error or missing resources for $L/$M/$R, treat as fatal and exit(1). */
+static void process_directive_token(Scanner *s, char dir, const char *val) {
+    /* Trim value (remove leading/trailing whitespace) — applies to all directives */
+    const char *vs = val; const char *ve = val + strlen(val);
+    /* build a temporary NUL-terminated copy of the trimmed value */
+    uint8_t *buf = NULL; long blen = 0;
+    size_t vlen;
+    ExtraRdf *node;
+    char *copy, *vcopy;
+    trim_space(&vs, &ve);
+    vlen = (size_t)(ve - vs);
+    vcopy = (char *)malloc(vlen + 1);
+    if (!vcopy) { fprintf(stderr, "oc: out of memory\n"); exit(1); }
+    memcpy(vcopy, vs, vlen);
+    vcopy[vlen] = '\0';
+
+    if (dir == 'M') {
+        /* $M stack_size — positive integer required; fatal on invalid value */
+        long valnum = 0;
+        const char *p = vcopy;
+        if (*p == '\0') {
             fprintf(stderr, "%s(%d): $M directive requires a positive integer\n",
                     s->filename, s->line);
-        } else {
-            parser_stack_size = val;
+            free(vcopy); exit(1);
         }
-    } else if (directive == 'L') {
-        if (parser_n_extra_rdfs < PARSER_MAX_EXTRA_RDFS) {
-            const char *start = arg;
-            const char *end;
-            size_t len;
-            char *copy;
-            ExtraRdf *node;
-            while (*start == ' ' || *start == '\t' || *start == '\r' || *start == '\n') start++;
-            end = start + strlen(start);
-            while (end > start && (end[-1] == ' ' || end[-1] == '\t' || end[-1] == '\r' || end[-1] == '\n')) end--;
-            len = (size_t)(end - start);
-            copy = (char*)malloc(len + 1);
-            if (!copy) { fprintf(stderr, "oc: out of memory\n"); return; }
-            memcpy(copy, start, len);
-            copy[len] = '\0';
-            node = (ExtraRdf*)malloc(sizeof(ExtraRdf));
-            if (!node) { fprintf(stderr, "oc: out of memory\n"); free(copy); return; }
-            node->path = copy;
-            node->next = NULL;
-            if (parser_extra_rdfs_tail) parser_extra_rdfs_tail->next = node;
-            else                        parser_extra_rdfs_head = node;
-            parser_extra_rdfs_tail = node;
-            parser_n_extra_rdfs++;
-        } else {
+        if (!(*p >= '0' && *p <= '9')) {
+            fprintf(stderr, "%s(%d): $M directive requires a positive integer\n",
+                    s->filename, s->line);
+            free(vcopy); exit(1);
+        }
+        while (*p >= '0' && *p <= '9') { valnum = valnum * 10 + (*p - '0'); p++; }
+        if (valnum <= 0) {
+            fprintf(stderr, "%s(%d): $M directive requires a positive integer\n",
+                    s->filename, s->line);
+            free(vcopy); exit(1);
+        }
+        parser_stack_size = valnum;
+    } else if (dir == 'L') {
+        /* $L path — keep the full trimmed string as provided; validate immediately. */
+        if (parser_n_extra_rdfs >= PARSER_MAX_EXTRA_RDFS) {
             fprintf(stderr, "oc: too many $L directives (max %d)\n", PARSER_MAX_EXTRA_RDFS);
+            free(vcopy); exit(1);
         }
-    } else if (directive == 'R') {
-        /* $R+ enable array bounds checks; $R- disable */
-        const char *p = arg;
-        while (*p == ' ' || *p == '\t') p++;
-        if (*p == '+')      pe_bounds_check = 1;
-        else if (*p == '-') pe_bounds_check = 0;
-        else fprintf(stderr, "%s(%d): $R directive requires + or -\n",
-                     s->filename, s->line);
+        /* Validate that the named file can be read and is not too large. Use read_file_to_buf. */
+        if (read_file_to_buf(vcopy, &buf, &blen) != 0) {
+            fprintf(stderr, "%s(%d): cannot open or read $L file '%s'\n",
+                    s->filename, s->line, vcopy);
+            free(vcopy); exit(1);
+        }
+        free(buf);
+        /* store the path string as before */
+        copy = (char*)malloc(strlen(vcopy) + 1);
+        if (!copy) { fprintf(stderr, "oc: out of memory\n"); free(vcopy); exit(1); }
+        strcpy(copy, vcopy);
+        node = (ExtraRdf*)malloc(sizeof(ExtraRdf));
+        if (!node) { fprintf(stderr, "oc: out of memory\n"); free(copy); free(vcopy); exit(1); }
+        node->path = copy; node->next = NULL;
+        if (parser_extra_rdfs_tail) parser_extra_rdfs_tail->next = node;
+        else                        parser_extra_rdfs_head = node;
+        parser_extra_rdfs_tail = node;
+        parser_n_extra_rdfs++;
+    } else if (dir == 'R') {
+        /* $R+ enable array bounds checks; $R- disable. Bad value is fatal. */
+        if (vcopy[0] == '+' && vcopy[1] == '\0') pe_bounds_check = 1;
+        else if (vcopy[0] == '-' && vcopy[1] == '\0') pe_bounds_check = 0;
+        else {
+            fprintf(stderr, "%s(%d): $R directive requires + or -\n",
+                    s->filename, s->line);
+            free(vcopy); exit(1);
+        }
     } else {
+        /* Unknown directive: keep previous behaviour — warn (non-fatal) */
         fprintf(stderr, "%s(%d): unknown system comment directive '$%c'\n%s\n",
-                s->filename, s->line, directive, s->cur_line);
+                s->filename, s->line, dir, s->cur_line);
     }
+    free(vcopy);
+}
+
+void parser_syscomment(Scanner *s, char directive, const char *arg) {
+    /* Build the full body starting with the initial directive char, so that
+       comma-separated tokens like "A+,B-,R+" are parsed as separate directives. */
+    char *p, *tstart, *tend, *tok, d;
+    int tlen;
+    const char *src = arg ? arg : "";
+    size_t src_len = strlen(src);
+    /* allocate exact-size body: directive char + arg */
+    size_t body_len = 1 + src_len;
+    char *body = (char *)malloc(body_len + 1);
+    if (!body) { fprintf(stderr, "oc: out of memory\n"); exit(1); }
+    body[0] = directive;
+    if (src_len) memcpy(body + 1, src, src_len);
+    body[1 + src_len] = '\0';
+
+    /* Special-case M and L: they take the remainder as a single value (no comma-splitting). */
+    if (directive == 'M' || directive == 'L') {
+        /* value is the substring after the initial char */
+        const char *val = (body + 1);
+        process_directive_token(s, directive, val);
+        free(body);
+        return;
+    }
+
+    /* Otherwise split by commas into tokens of the form: <DIR><VALUE>
+       e.g. "A+", "B-", "R+". Each token must start with a single uppercase char. */
+    p = body;
+    while (*p) {
+        /* skip leading commas/spaces */
+        while (*p == ',' || *p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
+        if (*p == '\0') break;
+        /* token start */
+        tstart = p;
+        /* find end at comma or NUL */
+        while (*p && *p != ',') p++;
+        tend = p;
+        /* token length >= 1 (must include directive letter) */
+        if (tend <= tstart) continue;
+        /* copy token into temporary buffer */
+        tlen = (int)(tend - tstart);
+        tok = (char *)malloc((size_t)tlen + 1);
+        if (!tok) { fprintf(stderr, "oc: out of memory\n"); free(body); exit(1); }
+        memcpy(tok, tstart, (size_t)tlen);
+        tok[tlen] = '\0';
+        /* First character of token is directive letter */
+        d = tok[0];
+        if (!(d >= 'A' && d <= 'Z')) {
+            fprintf(stderr, "%s(%d): invalid directive name '%c' in system comment\n",
+                    s->filename, s->line, d);
+            free(tok); free(body); exit(1);
+        }
+        /* value is token+1 (may be empty) */
+        process_directive_token(s, d, tok + 1);
+        free(tok);
+        /* loop continues (p currently at comma or NUL) */
+    }
+    free(body);
 }
 Scanner *pe_sc;                  /* current scanner, set by parse_module */
 static char cur_mod[NAME_LEN];   /* current module name (set by parse_module) */
@@ -370,7 +458,8 @@ void parse_repeat_stat(TypeDesc *ret_type) {
 }
 
 /* parse_const_label: parse a constant integer label value.
-   Handles negative literals (T_MINUS T_INT) and named constants. */
+   Handles negative literals (T_MINUS T_INT) and named constants, including
+   qualified imported constants (Alias.Const) via parse_designator. */
 int parse_const_label(void) {
     int neg = 0, val = 0;
     if (sc->sym == T_MINUS) { neg = 1; scanner_next(sc); }
@@ -379,9 +468,15 @@ int parse_const_label(void) {
     } else if (sc->sym == T_CHAR) {
         val = (int)(unsigned char)sc->ival; scanner_next(sc);
     } else if (sc->sym == T_IDENT) {
-        Symbol *s = sym_find(sc->id); scanner_next(sc);
-        if (!s || s->kind != K_CONST) { error("constant expected in CASE label"); return 0; }
-        val = s->val;
+        Item it;
+        /* Use parse_designator to handle both local and qualified constants. */
+        parse_designator(&it);
+        if (it.mode != M_CONST || !it.type ||
+            (it.type->form != TF_INTEGER && it.type->form != TF_CHAR)) {
+            error("constant expected in CASE label"); return 0;
+        }
+        if (it.type->form == TF_CHAR) val = (int)(unsigned char)it.val;
+        else val = it.val;
     } else {
         error("constant expected in CASE label"); return 0;
     }
@@ -906,16 +1001,19 @@ void parse_stat_seq(TypeDesc *ret_type) {
 }
 
 /* Read one array-dimension: integer literal or named integer constant.
-   Returns the value, or -2 on error (message already printed). */
+   Returns the value, or -2 on error (message already printed).
+   Accepts qualified imported constants via parse_designator. */
 static int32_t parse_array_dim(void) {
     if (sc->sym == T_INT) {
         int32_t v = sc->ival; scanner_next(sc); return v;
     } else if (sc->sym == T_IDENT) {
-        Symbol *s = sym_find(sc->id); scanner_next(sc);
-        if (!s || s->kind != K_CONST || s->type->form != TF_INTEGER) {
+        Item it;
+        /* Use parse_designator so Alias.Const works as well as local CONST */
+        parse_designator(&it);
+        if (it.mode != M_CONST || !it.type || it.type->form != TF_INTEGER) {
             error("integer constant expected as array dimension"); return -2;
         }
-        return s->val;
+        return it.val;
     }
     error("array length expected"); return -2;
 }

@@ -41,24 +41,34 @@ comment     = "(*" { any | comment } "*)" (* nested comments allowed *)
             | syscomment .
 
 (* System comments — body starts with '$'; treated as compiler directives,
-   not as documentation.  Unknown directives produce a warning.           *)
-syscomment  = "(*$" directive "*)"
-            | "//$" directive newline .
+   not as documentation. Multiple directives may be combined in a single comment,
+   separated by commas (e.g. (*$A+,B-,R+*)). Each directive is an uppercase letter
+   followed by a value. For most directives the value is trimmed of surrounding
+   whitespace; exceptions: $M and $L consume the remainder of the comment as their
+   value (not split by commas). Unknown directives produce a warning. Invalid or
+   unreadable values for $L or $M are fatal compiler errors. *)
+syscomment  = "(*$" directive_list "*)"
+            | "//$" directive_list newline .
 
-directive   = "L" filepath    (* $L<path> — include <path>.rdf in the output .om,
-                                  equivalent to passing -rdf <path> on the command line *)
+directive_list = directive { "," directive } .
+
+directive   = "L" filepath    (* $L<path> — include <path>.rdf in the output .om;
+                                   the file is stored under USER/<BASENAME>.RDF inside the .om.
+                                   If the path cannot be opened or read, the compiler reports
+                                   an error and compilation fails. *)
             | "M" integer   (* $M <size> — stack size hint (positive decimal LONGINT).
-                                  Stored as META-INF/STACK.TXT in the .om when compiled
-                                  with -entry.  Multiple $M directives: last one wins.
-                                  Ignored (no file written) when compiling without -entry. *)
+                                   When the module is compiled with -entry the value is written
+                                   as META-INF/STACK.TXT in the .om; multiple $M directives: last
+                                   one wins. Invalid or non-positive values are fatal. Ignored
+                                   (no file written) when compiling without -entry. *)
             | "R" ("+" | "-") (* $R+ enable array bounds checks; $R- disable (default).
-                                  When enabled: constant out-of-bounds index is a compile
-                                  error; variable index emits a runtime check that calls
-                                  SYSTEM_ErrIndexOutOfBounds (FAR, no args) on violation,
-                                  which prints "Array index out of bounds" and halts.
-                                  Directive takes effect immediately and applies to all
-                                  array subscripts that follow it in the source file.
-                                  $R- may appear anywhere to turn checks off again. *) .
+                                   When enabled: constant out-of-bounds index is a compile
+                                   error; variable index emits a runtime check that calls
+                                   SYSTEM_ErrIndexOutOfBounds (FAR, no args) on violation,
+                                   which prints "Array index out of bounds" and halts.
+                                   Directive takes effect immediately and applies to all
+                                   array subscripts that follow it in the source file.
+                                   $R- may appear anywhere to turn checks off again. *) .
 
 (* Keywords (all uppercase, not valid identifiers) *)
 keyword     = "ARRAY" | "BEGIN" | "BY" | "CASE" | "CONST" | "DIV" | "DO"
@@ -405,6 +415,8 @@ SysIdent    = "VAL" | "LSL" | "LSR" | "ASR" | "ROR" | "AND" | "IOR" | "XOR" .
 (* PUT(a: ADDRESS; x: INTEGER) — POP AX=x, POP BX=offset, POP ES=segment; MOV ES:[BX],AX. *)
 (* MOVE(VAR src, dst; n: INTEGER) — POP-based inline: REP MOVSB copy (any segment). *)
 (* FILL(VAR dst; n: INTEGER; b: BYTE) — POP-based inline: REP STOSB fill (any segment). *)
+(* PORTOUT(port: INTEGER; val: BYTE) — POP-based inline: OUT DX, AL. *)
+(* PORTIN(port: INTEGER; VAR val: BYTE) — POP-based inline: IN AL, DX; MOV ES:[BX], AL. *)
 
 
 (* ---- DESIGNATOR ---- *)
@@ -441,7 +453,7 @@ selector    = "." ident          (* record field access *)
 (*              ENTIER is a synonym for FLOOR *)
 (* Type casts:  INTEGER(x) BYTE(x) LONGINT(x) REAL(x) LONGREAL(x) *)
 (* FLOAT(x) is a synonym for REAL(x); ENTIER(x) is a synonym for FLOOR(x). *)
-(* SET type declared but SET IN operator not implemented. *)
+(* SET type and all operators (including IN) fully implemented. *)
 (* Implicit INTEGER→REAL/LONGREAL coercion: automatic in binary expressions (* / + - = # < > <= >=)
    when one operand is REAL/LONGREAL and the other is INTEGER/BYTE/LONGINT.
    Assignment still requires an explicit REAL(x)/LONGREAL(x) cast. *)

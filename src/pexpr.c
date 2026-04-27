@@ -1505,12 +1505,8 @@ void parse_expr(Item *item) {
         } else if (!type_is_extension(rhs_rec, lhs_rec)) {
             cg_load_imm(0);  /* unrelated types → always FALSE */
         } else {
-            /* Runtime: load pointer into ES:BX, read tag descriptor offset,
-               scan descriptor for rhs_rec->tag_id. */
-            cg_load_item(item);              /* DX:AX = far pointer (points to data) */
-            cg_dxax_to_esbx();               /* ES:BX = object data */
-            cg_load_tag_far();               /* AX = ES:[BX-2] = tag descriptor offset */
-            cg_is_tag_scan(rhs_rec->tag_id); /* AX = 0 or 1 */
+            /* Runtime: type-test: use centralized codegen helper. */
+            cg_is_tag_check(item, rhs_rec->tag_id); /* AX = 0 or 1 */
         }
         item->type=type_boolean; item->mode=M_REG;
     }

@@ -7,8 +7,8 @@ VAR i : INTEGER;
     p : ARRAY 127 OF CHAR;
 BEGIN
     i := 1;
-    WHILE i < Dos.ARGCOUNT() DO
-        Dos.ARG(i, p);
+    WHILE i <= Dos.ParamCount() DO
+        Dos.ParamStr(i, p);
         IF i # 1 THEN
             Out.Char(' ')
         END;

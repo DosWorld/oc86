@@ -15,7 +15,7 @@ MODULE ShowArgs;
  *   => Arg 3: foo
  *)
 
-IMPORT Args, Out;
+IMPORT Dos, Out;
 
 VAR
     buf : ARRAY 128 OF CHAR;
@@ -23,11 +23,10 @@ VAR
 
 PROCEDURE Run*;
 BEGIN
-    Args.ArgInit;
-    Out.String("Argument count: "); Out.Int(Args.ARGCOUNT(), 0); Out.Ln;
+    Out.String("Argument count: "); Out.Int(Dos.ParamCount(), 0); Out.Ln;
     i := 0;
-    WHILE i < Args.ARGCOUNT() DO
-        Args.ARG(i, buf);
+    WHILE i < Dos.ParamCount() DO
+        Dos.ParamStr(i, buf);
         Out.String("Arg "); Out.Int(i, 0); Out.String(": ["); Out.String(buf); Out.String("]"); Out.Ln;
         INC(i)
     END
