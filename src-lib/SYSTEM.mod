@@ -10,6 +10,8 @@ FSign*      = 128;
 FOverflow*  = 2048;
 
 TYPE
+ADDRESS* = ADDRESS;
+
 Registers* = RECORD
   AX*, BX*, CX*, DX*, SI*, DI*, DS*, ES*, Flags* : INTEGER
 END;
@@ -57,14 +59,6 @@ PROCEDURE OFS*(VAR v): INTEGER;
    POP AX=o (offset); POP DX=s (segment). Result: DX:AX = far pointer. SP balanced. *)
 PROCEDURE PTR*(s, o: INTEGER): ADDRESS;
   INLINE(058H, 05AH);
-
-(* PUT(a: ADDRESS; x: INTEGER)
-   Stores the word x to the far pointer address a.
-   Caller pushes a as {segment:2, offset:2} (deepest first), then x (2 bytes).
-   Stack on entry (POP order): x, offset, segment.
-   POP AX=x; POP BX=offset; POP ES=segment; MOV ES:[BX],AX. SP balanced. *)
-PROCEDURE PUT*(a: ADDRESS; x: INTEGER);
-  INLINE(058H, 05BH, 007H, 026H, 089H, 007H);
 
 (* MOVE(VAR src, dst; n: INTEGER)
    Copies n bytes from src to dst using REP MOVSB.

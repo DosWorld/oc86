@@ -5,10 +5,8 @@
 
 #pragma pack(push, 1)
 
-#define TDINFO_MAGIC 0x52FB
-
 typedef struct {
-    uint16_t magic;              /* must be 0x52FB */
+    uint16_t magic;
     uint8_t  minor_version;
     uint8_t  major_version;
     uint32_t names_pool_size;
@@ -74,14 +72,32 @@ typedef struct {
     uint16_t type;
 } MEMBER_RECORD;
 
+typedef struct {
+    uint16_t segment;
+    uint16_t start_offset;
+    uint16_t file_name_index;
+} SOURCE_FILE_RECORD;
+
+typedef struct {
+    uint16_t offset;
+    uint16_t line_number;
+} LINE_NUMBER_RECORD;
+
+typedef struct {
+    uint16_t source_file_index;
+    uint16_t segment_index;
+    uint16_t module_index;
+    uint16_t flags_or_reserved;
+} CORRELATION_RECORD;
+
 #pragma pack(pop)
 
-static char *symbol_class_names[] = {
+static const char *symbol_class_names[] = {
     "STATIC", "ABSOLUTE", "AUTO", "PASCAL_VAR",
     "REGISTER", "CONSTANT", "TYPEDEF", "STRUCT_UNION_OR_ENUM"
 };
 
-static char *type_id_names[] = {
+static const char *type_id_names[] = {
     "VOID", "LSTR", "DSTR", "PSTR", "SCHAR", "SINT", "SLONG",
     NULL, "UCHAR", "UINT", "ULONG", NULL, "PCHAR", "FLOAT", "TPREAL",
     "DOUBLE", "LDOUBLE", "BCD4", "BCD8", "BCD10", "BCDCOB",
@@ -92,12 +108,13 @@ static char *type_id_names[] = {
     "WORDBOOL", "LONGBOOL", NULL, NULL, NULL, NULL, NULL, NULL,
     "GLOBALHANDLE", "LOCALHANDLE"
 };
+
 #define TYPE_ID_MAX (sizeof(type_id_names) / sizeof(type_id_names[0]))
 
-static char *get_name(uint16_t index, char *pool)
+static const char *get_name(uint16_t index, const char *pool)
 {
+    const char *p;
     uint16_t i;
-    char *p;
     if (index == 0 || !pool) return NULL;
     p = pool;
     for (i = 1; i < index; i++) {
@@ -118,29 +135,55 @@ static int skip_bytes(FILE *f, long bytes)
     return fseek(f, bytes, SEEK_CUR) == 0;
 }
 
-static void hexdump(const uint8_t *data, int len)
+static SEGMENT_RECORD *find_segment_by_index(SEGMENT_RECORD *segments,
+                                             uint16_t count, uint16_t index)
 {
-    int i;
-    for (i = 0; i < len; i++) printf("%02X ", data[i]);
+    if (segments && index > 0 && index <= count)
+        return &segments[index - 1];
+    return NULL;
 }
 
 int main(int argc, char **argv)
 {
-    uint16_t i, idx, cls;
     FILE *fp;
-    long file_size, tdinfo_off, off;
+    long file_size;
+    long tdinfo_off;
+    long off;
+    uint16_t magic;
     TDINFO_HEADER hdr;
-    SYMBOL_RECORD *symbols = NULL;
-    MODULE_RECORD *modules = NULL;
-    uint8_t *src_files = NULL;
-    uint8_t *line_nums = NULL;
-    SCOPE_RECORD *scopes = NULL;
-    SEGMENT_RECORD *segments = NULL;
-    uint8_t *corrs = NULL;
-    TYPE_RECORD *types = NULL;
-    MEMBER_RECORD *members = NULL;
-    char *names_pool = NULL;
-    char *name, *mod, *id_str;
+    SYMBOL_RECORD *symbols;
+    MODULE_RECORD *modules;
+    SOURCE_FILE_RECORD *src_files;
+    LINE_NUMBER_RECORD *line_nums;
+    SCOPE_RECORD *scopes;
+    SEGMENT_RECORD *segments;
+    CORRELATION_RECORD *corrs;
+    TYPE_RECORD *types;
+    MEMBER_RECORD *members;
+    char *names_pool;
+    int i;
+    uint16_t j;
+    uint16_t line_idx;
+    const char *name;
+    uint8_t cls;
+    const char *fname;
+    const char *mod;
+    const char *id_str;
+    const char *type_name;
+    const char *member_name;
+    const char *end_mark;
+    uint16_t seg_end;
+
+    symbols = NULL;
+    modules = NULL;
+    src_files = NULL;
+    line_nums = NULL;
+    scopes = NULL;
+    segments = NULL;
+    corrs = NULL;
+    types = NULL;
+    members = NULL;
+    names_pool = NULL;
 
     if (argc != 2) {
         fprintf(stderr, "Usage: %s <file.exe>\n", argv[0]);
@@ -159,16 +202,15 @@ int main(int argc, char **argv)
 
     tdinfo_off = -1;
     for (off = 0; off < file_size - 1; off++) {
-        uint16_t magic;
         fseek(fp, off, SEEK_SET);
-        if (safe_read(&magic, 2, 1, fp) && magic == TDINFO_MAGIC) {
+        if (safe_read(&magic, 2, 1, fp) && magic == 0x52FB) {
             tdinfo_off = off;
             break;
         }
     }
 
     if (tdinfo_off < 0) {
-        fprintf(stderr, "TDINFO signature (0xFB52) not found\n");
+        fprintf(stderr, "TDINFO signature (0x52FB) not found\n");
         fclose(fp);
         return 1;
     }
@@ -196,7 +238,6 @@ int main(int argc, char **argv)
         return 1;
     }
 
-
     if (hdr.symbols_count) {
         symbols = malloc(hdr.symbols_count * sizeof(SYMBOL_RECORD));
         if (!symbols || !safe_read(symbols, sizeof(SYMBOL_RECORD), hdr.symbols_count, fp)) goto fail;
@@ -206,12 +247,12 @@ int main(int argc, char **argv)
         if (!modules || !safe_read(modules, sizeof(MODULE_RECORD), hdr.modules_count, fp)) goto fail;
     }
     if (hdr.source_files_count) {
-        src_files = malloc(hdr.source_files_count * 6);
-        if (!src_files || !safe_read(src_files, 6, hdr.source_files_count, fp)) goto fail;
+        src_files = malloc(hdr.source_files_count * sizeof(SOURCE_FILE_RECORD));
+        if (!src_files || !safe_read(src_files, sizeof(SOURCE_FILE_RECORD), hdr.source_files_count, fp)) goto fail;
     }
     if (hdr.line_numbers_count) {
-        line_nums = malloc(hdr.line_numbers_count * 4);
-        if (!line_nums || !safe_read(line_nums, 4, hdr.line_numbers_count, fp)) goto fail;
+        line_nums = malloc(hdr.line_numbers_count * sizeof(LINE_NUMBER_RECORD));
+        if (!line_nums || !safe_read(line_nums, sizeof(LINE_NUMBER_RECORD), hdr.line_numbers_count, fp)) goto fail;
     }
     if (hdr.scopes_count) {
         scopes = malloc(hdr.scopes_count * sizeof(SCOPE_RECORD));
@@ -222,8 +263,8 @@ int main(int argc, char **argv)
         if (!segments || !safe_read(segments, sizeof(SEGMENT_RECORD), hdr.segments_count, fp)) goto fail;
     }
     if (hdr.correlations_count) {
-        corrs = malloc(hdr.correlations_count * 8);
-        if (!corrs || !safe_read(corrs, 8, hdr.correlations_count, fp)) goto fail;
+        corrs = malloc(hdr.correlations_count * sizeof(CORRELATION_RECORD));
+        if (!corrs || !safe_read(corrs, sizeof(CORRELATION_RECORD), hdr.correlations_count, fp)) goto fail;
     }
     if (hdr.types_count) {
         types = malloc(hdr.types_count * sizeof(TYPE_RECORD));
@@ -246,106 +287,184 @@ int main(int argc, char **argv)
 
     if (symbols) {
         printf("=== Symbols (%u) ===\n", hdr.symbols_count);
-        for (i = 0; i < hdr.symbols_count; i++) {
-            name = get_name(symbols[i].index, names_pool);
-            cls = symbols[i].bitfield & 0x07;
+        for (j = 0; j < hdr.symbols_count; j++) {
+            name = get_name(symbols[j].index, names_pool);
+            cls = symbols[j].bitfield & 0x07;
             printf("  [%3u] %-40s type=%u seg:off=%04X:%04X class=%s\n",
-                   i, name ? name : "(null)", symbols[i].type,
-                   symbols[i].segment, symbols[i].offset, symbol_class_names[cls]);
+                   j, name ? name : "(null)", symbols[j].type,
+                   symbols[j].segment, symbols[j].offset, symbol_class_names[cls]);
         }
         putchar('\n');
     }
 
     if (modules) {
         printf("=== Modules (%u) ===\n", hdr.modules_count);
-        for (i = 0; i < hdr.modules_count; i++) {
-            printf("  [%3u] %s\n", i, get_name(modules[i].name, names_pool));
+        for (j = 0; j < hdr.modules_count; j++) {
+            name = get_name(modules[j].name, names_pool);
+            printf("  [%3u] %s\n", j, name ? name : "(null)");
         }
         putchar('\n');
     }
 
-    if (src_files) {
+    if (src_files && line_nums) {
+        printf("=== Source files with line numbers (%u files, %u lines) ===\n",
+               hdr.source_files_count, hdr.line_numbers_count);
+        line_idx = 0;
+        for (j = 0; j < hdr.source_files_count; j++) {
+            fname = get_name(src_files[j].file_name_index, names_pool);
+            if (!fname) fname = "(null)";
+            if (j + 1 < hdr.source_files_count &&
+                src_files[j+1].segment == src_files[j].segment) {
+                seg_end = src_files[j+1].start_offset;
+            } else {
+                SEGMENT_RECORD *seg;
+                seg = NULL;
+                for (i = 0; i < (int)hdr.segments_count; i++) {
+                    if (segments[i].code_segment == src_files[j].segment) {
+                        seg = &segments[i];
+                        break;
+                    }
+                }
+                seg_end = seg ? seg->code_length : 0xFFFF;
+            }
+            printf("  %04X:%04X-%04X %s\n",
+                   src_files[j].segment, src_files[j].start_offset,
+                   seg_end, fname);
+            while (line_idx < hdr.line_numbers_count &&
+                   line_nums[line_idx].offset >= src_files[j].start_offset &&
+                   line_nums[line_idx].offset < seg_end) {
+                printf("          line %5u at offset %04X\n",
+                       line_nums[line_idx].line_number,
+                       line_nums[line_idx].offset);
+                line_idx++;
+            }
+        }
+        putchar('\n');
+    } else if (src_files) {
         printf("=== Source files (%u) ===\n", hdr.source_files_count);
-        for (i = 0; i < hdr.source_files_count; i++) {
-            printf("  [%3u] raw: ", i);
-            hexdump(src_files + i*6, 6);
-            putchar('\n');
+        for (j = 0; j < hdr.source_files_count; j++) {
+            fname = get_name(src_files[j].file_name_index, names_pool);
+            printf("  [%3u] %04X:%04X -> %s\n",
+                   j, src_files[j].segment, src_files[j].start_offset,
+                   fname ? fname : "(null)");
         }
         putchar('\n');
-    }
-
-    if (line_nums) {
+    } else if (line_nums) {
         printf("=== Line numbers (%u) ===\n", hdr.line_numbers_count);
-        for (i = 0; i < hdr.line_numbers_count; i++) {
-            printf("  [%3u] raw: ", i);
-            hexdump(line_nums + i*4, 4);
-            putchar('\n');
+        for (j = 0; j < hdr.line_numbers_count; j++) {
+            printf("  [%3u] offset=%04X  line=%u\n",
+                   j, line_nums[j].offset, line_nums[j].line_number);
         }
         putchar('\n');
     }
 
     if (scopes) {
         printf("=== Scopes (%u) ===\n", hdr.scopes_count);
-        for (i = 0; i < hdr.scopes_count; i++)
+        for (j = 0; j < hdr.scopes_count; j++) {
             printf("  [%3u] sym_first=%u cnt=%u parent=%u func=%u offset=%04X len=%04X\n",
-                   i, scopes[i].symbol_index, scopes[i].symbol_count,
-                   scopes[i].parent, scopes[i].function,
-                   scopes[i].offset, scopes[i].length);
+                   j, scopes[j].symbol_index, scopes[j].symbol_count,
+                   scopes[j].parent, scopes[j].function,
+                   scopes[j].offset, scopes[j].length);
+        }
         putchar('\n');
     }
 
     if (segments) {
         printf("=== Segments (%u) ===\n", hdr.segments_count);
-        for (i = 0; i < hdr.segments_count; i++) {
+        for (j = 0; j < hdr.segments_count; j++) {
             mod = "?";
-            if (modules && names_pool && segments[i].module > 0 && segments[i].module <= hdr.modules_count)
-                mod = get_name(modules[segments[i].module - 1].name, names_pool);
+            if (modules && names_pool && segments[j].module > 0 &&
+                segments[j].module <= hdr.modules_count)
+                mod = get_name(modules[segments[j].module - 1].name, names_pool);
             printf("  [%3u] module=%u (%s) seg:off=%04X:%04X len=%04X scope_first=%u scope_count=%u\n",
-                   i, segments[i].module, mod ? mod : "?",
-                   segments[i].code_segment, segments[i].code_offset,
-                   segments[i].code_length,
-                   segments[i].scope_index, segments[i].scope_count);
+                   j, segments[j].module, mod ? mod : "?",
+                   segments[j].code_segment, segments[j].code_offset,
+                   segments[j].code_length,
+                   segments[j].scope_index, segments[j].scope_count);
         }
         putchar('\n');
     }
 
     if (corrs) {
         printf("=== Correlations (%u) ===\n", hdr.correlations_count);
-        for (i = 0; i < hdr.correlations_count; i++) {
-            printf("  [%3u] raw: ", i);
-            hexdump(corrs + i*8, 8);
-            putchar('\n');
+        for (j = 0; j < hdr.correlations_count; j++) {
+            const char *src_name = "(none)";
+            const char *mod_name = "(none)";
+            const char *seg_mod = "(none)";
+            SEGMENT_RECORD *seg;
+            if (corrs[j].source_file_index > 0 &&
+                corrs[j].source_file_index <= hdr.source_files_count &&
+                src_files) {
+                src_name = get_name(
+                    src_files[corrs[j].source_file_index - 1].file_name_index,
+                    names_pool);
+                if (!src_name) src_name = "(null)";
+            }
+            if (corrs[j].module_index > 0 &&
+                corrs[j].module_index <= hdr.modules_count &&
+                modules && names_pool) {
+                mod_name = get_name(
+                    modules[corrs[j].module_index - 1].name, names_pool);
+                if (!mod_name) mod_name = "(null)";
+            }
+            seg = find_segment_by_index(segments, hdr.segments_count,
+                                        corrs[j].segment_index);
+            if (seg) {
+                seg_mod = "?";
+                if (modules && names_pool && seg->module > 0 &&
+                    seg->module <= hdr.modules_count)
+                    seg_mod = get_name(modules[seg->module - 1].name, names_pool);
+                if (!seg_mod) seg_mod = "?";
+                printf("  [%3u] src_file=\"%s\" seg=%u (%04X:%04X, mod=\"%s\") mod=%u (\"%s\") flags=0x%04X\n",
+                       j, src_name,
+                       corrs[j].segment_index,
+                       seg->code_segment, seg->code_offset,
+                       seg_mod,
+                       corrs[j].module_index, mod_name,
+                       corrs[j].flags_or_reserved);
+            } else {
+                printf("  [%3u] src_file=\"%s\" seg=%u (unknown) mod=%u (\"%s\") flags=0x%04X\n",
+                       j, src_name,
+                       corrs[j].segment_index,
+                       corrs[j].module_index, mod_name,
+                       corrs[j].flags_or_reserved);
+            }
         }
         putchar('\n');
     }
 
     if (types) {
         printf("=== Types (%u) ===\n", hdr.types_count);
-        for (i = 0; i < hdr.types_count; i++) {
-            id_str = (types[i].id < TYPE_ID_MAX && type_id_names[types[i].id])
-                     ? type_id_names[types[i].id] : "UNKNOWN";
-            name = (types[i].name && names_pool) ? get_name(types[i].name, names_pool) : "(anonymous)";
+        for (j = 0; j < hdr.types_count; j++) {
+            id_str = (types[j].id < TYPE_ID_MAX && type_id_names[types[j].id])
+                     ? type_id_names[types[j].id] : "UNKNOWN";
+            type_name = (types[j].name && names_pool)
+                        ? get_name(types[j].name, names_pool) : "(anonymous)";
             printf("  [%3u] %-20s id=%-12s size=%u class_type=%u member_type=%u\n",
-                   i, name, id_str, types[i].size, types[i].class_type, types[i].member_type);
+                   j, type_name, id_str, types[j].size,
+                   types[j].class_type, types[j].member_type);
         }
         putchar('\n');
     }
 
     if (members) {
         printf("=== Members (%u) ===\n", hdr.members_count);
-        for (i = 0; i < hdr.members_count; i++) {
-            name = (members[i].name && names_pool) ? get_name(members[i].name, names_pool) : "(anonymous)";
+        for (j = 0; j < hdr.members_count; j++) {
+            member_name = (members[j].name && names_pool)
+                          ? get_name(members[j].name, names_pool) : "(anonymous)";
+            end_mark = (members[j].info == 0xC0) ? " [END]" : "";
             printf("  [%3u] %-30s type=%u info=0x%02X%s\n",
-                   i, name, members[i].type, members[i].info,
-                   (members[i].info == 0xC0) ? " [END]" : "");
+                   j, member_name, members[j].type, members[j].info, end_mark);
         }
         putchar('\n');
     }
 
     if (names_pool && hdr.names_count) {
         printf("=== Names pool (%u names) ===\n", hdr.names_count);
-        for (idx = 1; idx <= hdr.names_count; idx++)
-            printf("  [%3u] %s\n", idx, get_name(idx, names_pool));
+        for (j = 1; j <= hdr.names_count; j++) {
+            name = get_name(j, names_pool);
+            printf("  [%3u] %s\n", j, name ? name : "(null)");
+        }
         putchar('\n');
     }
 

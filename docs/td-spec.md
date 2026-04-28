@@ -66,6 +66,9 @@ After reading the header, skip forward by extension_size bytes.
 
 ##  RECORD ARRAYS (sequence after header + extension)
 
+All record arrays follow immediately after the header + extension block,
+in the exact order listed below. The number of entries in each array
+is read from the corresponding header field.
 The records appear in this exact order:
 ```
   [1] Symbol records          (SYMBOL_RECORD)     x symbols_count
@@ -89,34 +92,42 @@ Index 0 means "no name" (null pointer).
 
 ###  SYMBOL_RECORD (9 bytes)
 
-```
-    uint16_t index;      // 1-based index into the string pool (0 = none)
-    uint16_t type;        // 1-based index into TYPE_RECORD array (0 = no type)
-    uint16_t offset;      // offset within the segment
-    uint16_t segment;     // segment number (frame address = image_base + seg*16)
-    uint8_t  bitfield;    // bits 0-2: symbol class; other bits reserved
-```
+Size: 9 bytes.  Total entries = symbols_count.
 
-    Symbol class values (bits 0-2):
-        0 = STATIC (global/static data or code)
-        1 = ABSOLUTE
-        2 = AUTO (local stack variable)
-        3 = PASCAL_VAR
-        4 = REGISTER
-        5 = CONSTANT
-        6 = TYPEDEF
-        7 = STRUCT_UNION_OR_ENUM
+typedef struct {
+    uint16_t index;      /* 1‑based index into the string pool
+                            (0 = no name)                              */
+    uint16_t type;        /* 1‑based index into TYPE_RECORD array
+                            (0 = no type)                              */
+    uint16_t offset;      /* offset within the segment                 */
+    uint16_t segment;     /* segment number                            */
+    uint8_t  bitfield;    /* bits 0‑2: symbol class; other bits
+                            reserved                                   */
+} SYMBOL_RECORD;
 
-    To compute a linear address (if needed):
-        ea = image_base + segment * 0x10 + offset
-    where image_base is usually the load segment of the PSP / start of memory.
+Symbol class values (bits 0‑2):
+    0 = STATIC              (global/static data or code)
+    1 = ABSOLUTE
+    2 = AUTO                (local stack variable)
+    3 = PASCAL_VAR
+    4 = REGISTER
+    5 = CONSTANT
+    6 = TYPEDEF
+    7 = STRUCT_UNION_OR_ENUM
+
+To compute a linear address (if needed):
+    ea = image_base + segment * 0x10 + offset
+where image_base is the load segment of the PSP (Program Segment Prefix).
 
 ###  MODULE_RECORD (16 bytes)
 
-```
-    uint16_t name;        // index into string pool (module/obj file name)
-    uint8_t  padding[14];
-```
+Size: 16 bytes.  Total entries = modules_count.
+
+typedef struct {
+    uint16_t name;         /* index into string pool (module/object
+                              file name)                               */
+    uint8_t  padding[14];  /* unused                                   */
+} MODULE_RECORD;
 
 ###  Source File Entries (6 bytes each)
 
@@ -183,26 +194,38 @@ Note: In the TDINFO block, SOURCE_FILE_RECORDs and LINE_NUMBER_RECORDs
 
 ### SCOPE_RECORD (12 bytes)
 
-```
-    uint16_t symbol_index; // first symbol (1-based) belonging to this scope
-    uint16_t symbol_count; // number of symbols in this scope
-    uint16_t parent;       // index of parent scope (0 = none)
-    uint16_t function;     // optional index of the function symbol containing this scope
-    uint16_t offset;       // offset from the segment start
-    uint16_t length;       // length of the scope
-```
+Size: 12 bytes.  Total entries = scopes_count.
+
+typedef struct {
+    uint16_t symbol_index; /* first symbol (1‑based) belonging to
+                              this scope                               */
+    uint16_t symbol_count; /* number of symbols in this scope          */
+    uint16_t parent;       /* index of parent scope (0 = none)         */
+    uint16_t function;     /* index of the function symbol containing
+                              this scope                               */
+    uint16_t offset;       /* offset from the segment start            */
+    uint16_t length;       /* length of the scope                      */
+} SCOPE_RECORD;
+
+Scopes are used to associate local symbols (class AUTO) with the function
+they belong to, and to determine the stack frame layout.
 
 ### SEGMENT_RECORD (16 bytes)
 
-```
-    uint16_t module;        // 1-based index into MODULE_RECORD (module that owns this segment)
-    uint16_t code_segment;  // segment number of the code (actual segment value)
-    uint16_t code_offset;   // offset within the segment (usually 0)
-    uint16_t code_length;   // length of the segment in bytes
-    uint16_t scope_index;   // first scope record for this segment (1-based)
-    uint16_t scope_count;   // number of scopes belonging to this segment
-    uint8_t  padding[4];
-```
+Size: 16 bytes.  Total entries = segments_count.
+
+typedef struct {
+    uint16_t module;        /* 1‑based index into MODULE_RECORD
+                               (module that owns this segment)         */
+    uint16_t code_segment;  /* segment number (absolute value)         */
+    uint16_t code_offset;   /* starting offset within the segment      */
+    uint16_t code_length;   /* length of the segment in bytes          */
+    uint16_t scope_index;   /* first scope record for this segment
+                               (1‑based)                               */
+    uint16_t scope_count;   /* number of scopes belonging to the
+                               segment                                 */
+    uint8_t  padding[4];    /* unused                                  */
+} SEGMENT_RECORD;
 
 ### Correlation Entries (8 bytes each)
 
@@ -257,95 +280,110 @@ without explicit correlation records.
 
 ### TYPE_RECORD (8 bytes)
 
-```
-    uint8_t  id;           // Type identifier (see TypeId enum below)
-    uint16_t name;         // index into string pool (0 = anonymous)
-    uint16_t size;         // size of the type in bytes (0 for arrays means use inner element size)
-    uint8_t  class_type;   // (reserved / rarely used)
-    uint16_t member_type;  // for ARRAY: index of element type;
-                           // for STRUCT/UNION: index of first MEMBER_RECORD;
-                           // for ENUM: ?
-                           // for FUNCTION: return type? (implementation specific)
-```
+Size: 8 bytes.  Total entries = types_count.
 
-    TypeId values (only the most common are listed):
-        0  = void
-        1  = lstr
-        2  = dstr
-        3  = pstr
-        4  = schar
-        5  = sint  (short integer)
-        6  = slong (long integer)
-        8  = uchar
-        9  = uint
-        10 = ulong
-        12 = pchar (pointer to char)
-        13 = float
-        14 = tpreal (10-byte real)
-        15 = double
-        16 = long double
-        17 = bcd4
-        18 = bcd8
-        19 = bcd10
-        20 = bcdcob
-        21 = near pointer
-        22 = far pointer
-        23 = seg (segment)
-        24 = near386
-        25 = far386
-        26 = array
-        28 = parray (pointer to array?)
-        30 = struct
-        31 = union
-        34 = enum
-        35 = function
-        36 = label
-        37 = set
-        38 = tfile
-        39 = bfile
-        40 = bool (8-bit)
-        41 = penum (pointer to enum?)
-        44 = funcprototype
-        45 = specialfunc
-        46 = object
-        52 = nref (near reference)
-        53 = fref (far reference)
-        54 = wordbool (16-bit boolean)
-        55 = longbool (32-bit boolean)
-        62 = globalhandle
-        63 = localhandle
+typedef struct {
+    uint8_t  id;           /* type identifier (see TypeId enum below)  */
+    uint16_t name;         /* index into string pool (0 = anonymous)   */
+    uint16_t size;         /* size in bytes (0 = see note)             */
+    uint8_t  class_type;   /* rarely used / reserved                   */
+    uint16_t member_type;  /* for ARRAY: index of element type;
+                              for STRUCT/UNION: index of first
+                              MEMBER_RECORD;
+                              for ENUM: ?
+                              for FUNCTION: return type?               */
+} TYPE_RECORD;
 
-    For arrays, the element type is obtained by following member_type
-    recursively until a non-ARRAY type is found; the total size is the
-    element size multiplied by the number of elements (given elsewhere).
+TypeId values (most common):
+    0  = void
+    1  = lstr
+    2  = dstr
+    3  = pstr
+    4  = schar
+    5  = sint  (short integer)
+    6  = slong (long integer)
+    8  = uchar
+    9  = uint
+    10 = ulong
+    12 = pchar (pointer to char)
+    13 = float
+    14 = tpreal (10‑byte real)
+    15 = double
+    16 = long double
+    17 = bcd4
+    18 = bcd8
+    19 = bcd10
+    20 = bcdcob
+    21 = near pointer
+    22 = far pointer
+    23 = seg (segment)
+    24 = near386
+    25 = far386
+    26 = array
+    28 = parray (pointer to array?)
+    30 = struct
+    31 = union
+    34 = enum
+    35 = function
+    36 = label
+    37 = set
+    38 = tfile
+    39 = bfile
+    40 = bool (8‑bit)
+    41 = penum (pointer to enum?)
+    44 = funcprototype
+    45 = specialfunc
+    46 = object
+    52 = nref (near reference)
+    53 = fref (far reference)
+    54 = wordbool (16‑bit boolean)
+    55 = longbool (32‑bit boolean)
+    62 = globalhandle
+    63 = localhandle
+
+For arrays, the element type is obtained by following member_type
+recursively until a non‑ARRAY type is found; the array size is then
+determined by multiplying the element size by the array dimension
+(stored elsewhere, e.g. in a separate count field not detailed here).
+When size is 0, use the element size from the inner type.
 
 ### MEMBER_RECORD (5 bytes)
 
-```
-    uint8_t  info;         // 0xC0 marks the end of a struct/union member list
-    uint16_t name;         // index into string pool (member name)
-    uint16_t type;         // 1-based index into TYPE_RECORD (type of member)
-```
+Size: 5 bytes.  Total entries = members_count.
 
-    Iterate through members starting from the member_type field of the
-    enclosing TYPE_RECORD (struct/union) until an entry with info == 0xC0
-    is encountered. That entry itself ends the list (and may still contain
-    a name/type, but usually is just a terminator).
+typedef struct {
+    uint8_t  info;         /* 0xC0 marks the end of a struct/union
+                              member list                              */
+    uint16_t name;         /* index into string pool (member name)     */
+    uint16_t type;         /* 1‑based index into TYPE_RECORD (member
+                              type)                                    */
+} MEMBER_RECORD;
+
+To read the members of a structure or union, start from the member_type
+field of the enclosing TYPE_RECORD and iterate through the MEMBER_RECORD
+array until an entry with info == 0xC0 is encountered. That entry itself
+terminates the list (and usually has zero name/type).
 
 ## STRING POOL
 
-The pool is a contiguous block of null-terminated ASCII strings.
-Strings are indexed starting from 1 (not 0). Index 0 always means
-"no string" (null pointer).
+The pool is a single contiguous block of raw bytes located at the very
+end of the file. It contains all symbolic names as tightly packed
+null‑terminated ASCII strings.
+
+Location:
+    pool_offset = file_size - header.names_pool_size
+    pool_size   = header.names_pool_size
+
+Strings are indexed starting from 1 (not 0). Index 0 means “no name”
+(null pointer).
 
 To read string #N:
-  - Seek to the pool start
-  - Skip (N-1) null-terminated strings
+  - Start at the pool beginning.
+  - Skip (N‑1) null‑terminated strings by looking for '\0' and advancing.
   - The next byte is the first character of string N; read until '\0'.
 
-Care must be taken to ensure the pool is correctly read on little-endian
-machines; the length field is a byte count, and the strings are raw ASCII
-without any encoding.
+Example: if the pool contains "File\0Main\0Func\0", index 1 = "File",
+index 2 = "Main", index 3 = "Func".
 
 ## EXAMPLE READING ORDER (Pseudo-C)
 

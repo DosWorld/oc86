@@ -83,6 +83,8 @@ static void write_one_type(FILE *f, const char *mod_name, Symbol *sym) {
         fprintf(f, "TYPE %s_%s POINTER ", mod_name, sym->name);
         write_type(f, td->base);
         fprintf(f, "\n");
+    } else if (td && td->form == TF_ADDRESS) {
+        fprintf(f, "TYPE %s_%s ADDRESS\n", mod_name, sym->name);
     } else {
         fprintf(f, "TYPE %s_%s\n", mod_name, sym->name);
     }
@@ -123,14 +125,15 @@ void def_write(FILE *f, const char *mod_name) {
             write_one_type(f, mod_name, sym);
     }
 
-    /* Pass 3: VAR */
+    /* Pass 3: VAR — format: VAR fullname type seg offset */
     for (sym = scope->symbols; sym; sym = sym->next) {
         if (!sym->exported) continue;
         if (strchr(sym->name, '.')) continue;
         if (sym->kind == K_VAR) {
             int seg = (sym->level == 0) ? SEG_DATA : SEG_CODE;
-            fprintf(f, "VAR %s_%s %d %ld\n",
-                    mod_name, sym->name, seg, (long)sym->adr);
+            fprintf(f, "VAR %s_%s ", mod_name, sym->name);
+            write_type(f, sym->type);
+            fprintf(f, " %d %ld\n", seg, (long)sym->adr);
         }
     }
 
@@ -149,12 +152,16 @@ void def_write(FILE *f, const char *mod_name) {
             if (pt->n_params > 0) {
                 Symbol *p;
                 for (p = pt->params; p; p = p->next) {
-                    if (p->kind == K_VARPARAM)
+                    if (p->kind == K_VARPARAM && p->typeless)
+                        fprintf(f, "  PARAM TYPELESSVAR %s\n", p->name);
+                    else if (p->kind == K_VARPARAM)
                         fprintf(f, "  PARAM VAR %s ", p->name);
                     else
                         fprintf(f, "  PARAM %s ", p->name);
-                    write_type(f, p->type);
-                    fprintf(f, "\n");
+                    if (p->kind != K_VARPARAM || !p->typeless) {
+                        write_type(f, p->type);
+                        fprintf(f, "\n");
+                    }
                 }
             }
             fprintf(f, "  BYTES");
@@ -175,12 +182,16 @@ void def_write(FILE *f, const char *mod_name) {
             if (pt && pt->n_params > 0) {
                 Symbol *p;
                 for (p = pt->params; p; p = p->next) {
-                    if (p->kind == K_VARPARAM)
+                    if (p->kind == K_VARPARAM && p->typeless)
+                        fprintf(f, "  PARAM TYPELESSVAR %s\n", p->name);
+                    else if (p->kind == K_VARPARAM)
                         fprintf(f, "  PARAM VAR %s ", p->name);
                     else
                         fprintf(f, "  PARAM %s ", p->name);
-                    write_type(f, p->type);
-                    fprintf(f, "\n");
+                    if (p->kind != K_VARPARAM || !p->typeless) {
+                        write_type(f, p->type);
+                        fprintf(f, "\n");
+                    }
                 }
             }
             fprintf(f, "END\n");
@@ -477,22 +488,33 @@ int def_read(FILE *f, const char *alias) {
         /* ── PARAM: add parameter to current PROC or INLINE block ── */
         if (strcmp(keyword, "PARAM") == 0 && (cur_proc || cur_inline)) {
             TypeDesc *target = cur_proc ? cur_proc : cur_inline;
-            /* PARAM [VAR] <name> <type...> */
+            /* PARAM [VAR | TYPELESSVAR] <name> [<type...>] */
+            int is_typeless2 = 0;
             is_var2 = 0;
             kw2[0] = '\0';
             sscanf(q, "%32s", kw2);
             if (strcmp(kw2, "VAR") == 0) {
                 is_var2 = 1;
-                /* advance past VAR */
+                while (*q && *q != ' ' && *q != '\t') q++;
+                q = trim_lead(q);
+            } else if (strcmp(kw2, "TYPELESSVAR") == 0) {
+                is_var2 = 1;
+                is_typeless2 = 1;
                 while (*q && *q != ' ' && *q != '\t') q++;
                 q = trim_lead(q);
             }
             sscanf(q, "%32s", pname);
-            /* advance past pname */
-            while (*q && *q != ' ' && *q != '\t') q++;
-            q = trim_lead(q);
-            ptype = parse_def_type(&q);
-            type_add_param(target, pname, ptype, is_var2);
+            if (is_typeless2) {
+                /* typeless VAR: no type token; type is ADDRESS */
+                Symbol *ps = type_add_param(target, pname, type_address, 1);
+                ps->typeless = 1;
+            } else {
+                /* advance past pname */
+                while (*q && *q != ' ' && *q != '\t') q++;
+                q = trim_lead(q);
+                ptype = parse_def_type(&q);
+                type_add_param(target, pname, ptype, is_var2);
+            }
             continue;
         }
 
@@ -531,15 +553,25 @@ int def_read(FILE *f, const char *alias) {
             s->exported = 1;
             strncpy(s->mod_name, alias, NAME_LEN-1);
 
-        /* ── VAR (legacy format: VAR name seg offset) ── */
+        /* ── VAR: new format "VAR name type seg offset",
+                  legacy format "VAR name seg offset" (seg is a digit) ── */
         } else if (strcmp(keyword, "VAR") == 0) {
+            TypeDesc *var_type = type_integer;
             seg = 0; ofs_l = 0;
-            sscanf(q, "%d %ld", &seg, &ofs_l);
+            /* peek: if q starts with a digit it's legacy format (seg first) */
+            if (*q >= '0' && *q <= '9') {
+                sscanf(q, "%d %ld", &seg, &ofs_l);
+            } else {
+                /* new format: type token(s) then seg offset */
+                var_type = parse_def_type(&q);
+                q = trim_lead(q);
+                sscanf(q, "%d %ld", &seg, &ofs_l);
+            }
             offset = (int32_t)ofs_l;
             s = sym_new(qname, K_VAR);
             s->adr      = offset;
             s->level    = (seg == SEG_DATA) ? 0 : 1;
-            s->type     = type_integer;
+            s->type     = var_type;
             s->exported = 1;
             strncpy(s->mod_name, alias, NAME_LEN-1);
 
@@ -588,6 +620,14 @@ int def_read(FILE *f, const char *alias) {
                     s->exported = 1;
                     strncpy(s->mod_name, alias, NAME_LEN-1);
                 }
+            } else if (strcmp(subkw, "ADDRESS") == 0) {
+                s = sym_find(qname);
+                if (!s) {
+                    s = sym_new(qname, K_TYPE);
+                    s->exported = 1;
+                    strncpy(s->mod_name, alias, NAME_LEN-1);
+                }
+                s->type = type_address;
             } else {
                 /* plain opaque type */
                 s = sym_find(qname);

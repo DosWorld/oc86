@@ -83,10 +83,9 @@ are equal (as in tiny/small/compact models) is WRONG for this target.
 2. **Array element access in data segment**: use `MOV DX,DS; MOV ES,DX` to set ES=DS
    before accessing via the `ES:[BX]` convention.  **Do not assume ES=DS.**
 
-3. **`SYSTEM.GET(addr, var)` / `SYSTEM.PUT(addr, val)`**: addr is a full `ADDRESS`
-   (far pointer, any segment — heap, stack, data).  Codegen: load DX:AX via
-   `cg_load_item`, then `MOV ES,DX; MOV BX,AX`; access via `ES:[BX]`.
-   DS is never modified.
+3. **Memory access through ADDRESS**: use `POINTER TO T` and pointer dereference (`p^`).
+   Assign an `ADDRESS` value to a typed pointer variable; then `p^` reads/writes through it.
+   `SYSTEM.GET` and `SYSTEM.PUT` have been **removed** — they are not part of this dialect.
 
 4. **`SYSTEM.MOVE(src, dst: ADDRESS; n: INTEGER)` / `SYSTEM.FILL(dst: ADDRESS; n: INTEGER; b: BYTE)`**:
    Implemented as INLINE procedures in `SYSTEM.mod` (POP-based value mode).
@@ -926,7 +925,7 @@ in call time.
 
 **INLINE procedures in SYSTEM.mod** (resolved from SYSTEM.om, typeless VAR push):
 
-All of ADR/SEG/OFS/PUT/PTR/MOVE/FILL are INLINE procedures in SYSTEM.mod using typeless
+All of ADR/SEG/OFS/PTR/MOVE/FILL/PORTOUT/PORTIN are INLINE procedures in SYSTEM.mod using typeless
 VAR params. `parse_actual_params` computes the far address of each actual variable and
 pushes `{segment, offset}` = 4 bytes; the INLINE byte pattern then POPs them.
 
@@ -936,11 +935,14 @@ pushes `{segment, offset}` = 4 bytes; the INLINE byte pattern then POPs them.
 | `SYSTEM.SEG(v)` | `VAR v): INTEGER` | `58 58` | Segment of `v` (SS for locals, DS for globals, heap seg for `p^`) |
 | `SYSTEM.OFS(v)` | `VAR v): INTEGER` | `58 59` | Offset of `v` within its segment |
 | `SYSTEM.PTR(s, o)` | `s, o: INTEGER): ADDRESS` | `58 5A` | Construct far pointer from seg `s` and ofs `o` |
-| `SYSTEM.PUT(a, x)` | `a: ADDRESS; x: INTEGER` | `58 5B 07 26 89 07` | Write word `x` to far pointer `a` |
 | `SYSTEM.MOVE(src, dst, n)` | `VAR src, dst; n: INTEGER` | `59 5F 07 5E 58 1E 8E D8 FC F3 A4 1F` | Copy `n` bytes from `src` to `dst` |
 | `SYSTEM.FILL(dst, n, b)` | `VAR dst; n: INTEGER; b: BYTE` | `58 59 5F 07 FC F3 AA` | Fill `n` bytes at `dst` with byte `b` |
 | `SYSTEM.PORTOUT(p, b)` | `p: INTEGER; b: BYTE` | `58 5A EE` | Write byte `b` to port `p` (OUT DX, AL) |
 | `SYSTEM.PORTIN(p, v)` | `p: INTEGER; VAR v: BYTE` | `58 5B 5A EC 26 88 07` | Read byte from port `p` into `v` (IN AL, DX) |
+
+**Removed (not available in this dialect):** `SYSTEM.GET`, `SYSTEM.PUT`, `SYSTEM.VAL`.
+Use `POINTER TO T` and `p^` for memory read/write through an `ADDRESS`.
+Use `INTEGER(x)`, `BYTE(x)`, `CHR(x)`, `ORD(x)` for type reinterpretation/casting.
 
 Invariants: `ADR(n^) = n`; `SEG(n^) = SEG(n)`; `OFS(n^) = OFS(n)`; `ADR(v) = PTR(SEG(v), OFS(v))`.
 
@@ -961,30 +963,29 @@ Invariants: `ADR(n^) = n`; `SEG(n^) = SEG(n)`; `OFS(n^) = OFS(n)`; `ADR(v) = PTR
 
 | Intrinsic | Returns | Why compiler built-in |
 |-----------|---------|----------------------|
-| `SYSTEM.VAL(T, expr)` | T | First arg is a TYPE, not an expression |
 | `SYSTEM.LSL(x, n)` | INTEGER/LONGINT | Type-dispatch (INTEGER vs LONGINT) + const vs variable shift |
 | `SYSTEM.LSR(x, n)` | INTEGER/LONGINT | Same |
 | `SYSTEM.ASR(x, n)` | INTEGER/LONGINT | Same |
 | `SYSTEM.ROR(x, n)` | INTEGER/LONGINT | Same |
+| `SYSTEM.AND(x, y)` | INTEGER/LONGINT | Bitwise AND with type dispatch |
+| `SYSTEM.IOR(x, y)` | INTEGER/LONGINT | Bitwise OR with type dispatch |
+| `SYSTEM.XOR(x, y)` | INTEGER/LONGINT | Bitwise XOR with type dispatch |
 
-**Statement intrinsic (compiler built-in):**
+These intrinsics are **not** expressible as INLINE byte patterns because they need type dispatch (INTEGER vs LONGINT). They are registered in the compiler under `"SYSTEM.Name"` (not as bare names), so **bare `LSL(x,n)` is a compile error** — callers must write `SYSTEM.LSL(x,n)`.
 
-| Intrinsic | Signature | Why compiler built-in |
-|-----------|-----------|----------------------|
-| `SYSTEM.GET(a, var)` | `a: ADDRESS; VAR var` | Store target is a typed designator; type determines store width |
+**Rule: SYSTEM intrinsics must not be pre-declared with bare names in the compiler.** Any intrinsic conceptually belonging to SYSTEM is registered in `sym_init()` under `"SYSTEM.Name"` so that only qualified `SYSTEM.Name(...)` access works.
 
 **Key codegen notes:**
 - ADR/SEG/OFS/PTR: share the same typeless VAR push mechanism; INLINE patterns differ only in how they pop the two stack words
-- `GET`: `26 8B 07` (MOV AX, ES:[BX]) — compiler built-in, cannot be INLINE
 - **CLD always** before REP MOVSB/STOSB (direction flag may be set)
 - `LSL/LSR/ASR/ROR`: inline 8086 shifts, no function call.
   Shift-by-1: `D1` form. Shift-by-N (N≥2): `MOV CL,N` then CL form.
   Variable: `MOV CL,AL / AND CL,0Fh` then CL form.
 
-**SP_ constants (symbols.h) — ADR, SEG, OFS, PUT, PTR, MOVE, FILL all removed (now INLINE in SYSTEM.mod):**
+**SP_ constants (symbols.h) — ADR, SEG, OFS, PTR, MOVE, FILL all resolved via SYSTEM.DEF (INLINE in SYSTEM.mod):**
 ```c
-SP_VAL=13  SP_GET=14
 SP_LSL=21  SP_ASR=22  SP_ROR=23  SP_LSR=24
+SP_AND=28  SP_IOR=29  SP_XOR=30
 ```
 
 ---

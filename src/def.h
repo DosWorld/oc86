@@ -7,18 +7,29 @@
 /* .def file format (plain text):
  *
  *   MODULE <name>
- *   CONST  <name> <value>
- *   VAR    <name> <seg> <offset>
- *   TYPE   <name>
- *   PROC   <name> <seg> <offset>
+ *   CONST  <fullname> <value>
+ *   VAR    <fullname> <type> <seg> <offset>
+ *            type: INTEGER|BOOLEAN|CHAR|BYTE|LONGINT|REAL|LONGREAL|SET|ADDRESS|
+ *                  POINTER <base> | <RecordName>
+ *            seg: 0=code, 1=data; offset: decimal (signed)
+ *   TYPE   <fullname> [RECORD <size> … FIELD … BASE … END | POINTER <base>]
+ *   PROC   <fullname> FAR|NEAR <rettype>
+ *     PARAM [VAR] <name> <type>
+ *     PARAM TYPELESSVAR <name>         ← typeless VAR param (no explicit type)
+ *     END
+ *   INLINE <fullname> <rettype>
+ *     PARAM [VAR] <name> <type>
+ *     PARAM TYPELESSVAR <name>
+ *     BYTES <byte|Pn> ...
+ *     END
  *
  * All names are the *prefixed* form (e.g. "Foo_Bar").
- * <seg> is 0=code, 1=data, 2=bss.
- * <offset> is decimal.
+ * Reader backward-compatible: old VAR lines with no type token are detected
+ * by checking if the character after the name starts with a digit.
  *
  * Writer: def_write — called once per module compilation.
  * Reader: def_read  — parses a .def file and registers symbols
- *                     in the current scope as K_IMPORT entries.    */
+ *                     in the current scope under "alias.shortname" keys. */
 
 /* Write all exported symbols from top_scope to 'f'.
    mod_name is the undecorated module name (e.g. "Foo"). */

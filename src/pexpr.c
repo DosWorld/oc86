@@ -176,8 +176,9 @@ void parse_designator(Item *item) {
                 /* Check if the symbol was loaded from a .def file into scope.
                    def_read registers symbols under "alias.shortname" to avoid
                    collisions with local declarations in the importing module.
-                   Fall back to plain short_id for SYSTEM universe pre-declarations
-                   (SP_ADR, SP_PUT, etc.) which bypass def_read entirely. */
+                   SYSTEM compiler intrinsics (LSL, AND, etc.) are registered
+                   under "SYSTEM.Name" in the universe, so def_key matches directly.
+                   Bare Name() access is intentionally not supported for SYSTEM intrinsics. */
                 {
                 char def_key[NAME_LEN*2];
                 snprintf(def_key, sizeof(def_key), "%s.%s", sym->name, short_id);
@@ -199,7 +200,7 @@ void parse_designator(Item *item) {
                     continue;
                 }
                 if (def_sym && def_sym->kind == K_SYSPROC) {
-                    /* compiler intrinsic (SYSTEM.ADR, SYSTEM.VAL, etc.) */
+                    /* compiler intrinsic (SYSTEM.LSL, SYSTEM.AND, etc.) */
                     item->mode = M_SYSPROC;
                     item->val  = def_sym->sys_id;
                     item->type = type_notype;
@@ -1519,25 +1520,8 @@ void parse_expr(Item *item) {
    ================================================================ */
 static void parse_system_intrinsic(Item *item, int id) {
     Item arg;
-    TypeDesc *tgt;
     pe_expect(T_LPAREN);
     switch (id) {
-
-    case SP_VAL: {
-        /* SYSTEM.VAL(Type, expr) -> Type: reinterpret bits (no code generated).
-           Sizes must match. */
-        tgt = type_integer;
-        pe_parse_type(&tgt);
-        pe_expect(T_COMMA);
-        parse_expr(&arg);
-        cg_load_item(&arg);
-        if (tgt->size != arg.type->size) {
-            pe_error("SYSTEM.VAL: type sizes must match");
-        }
-        item->type = tgt;
-        item->mode = M_REG;
-        break;
-    }
 
     case SP_LSL:
     case SP_LSR:

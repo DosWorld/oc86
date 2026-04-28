@@ -303,18 +303,18 @@ void sym_init(void) {
     predef_sysproc("ENTIER",  SP_FLOOR);    /* ENTIER is a synonym for FLOOR */
     predef_sysproc("DISPOSE", SP_DISPOSE);  /* SYSTEM extension */
 
-    /* SYSTEM compiler intrinsics — accessible only via SYSTEM.xxx qualified access.
-       Pre-declared in universe so sym_find("ADR") etc. succeeds from the
-       SYSTEM.xxx dot branch in parse_designator. */
-    predef_sysproc("VAL",  SP_VAL);
-    predef_sysproc("GET",  SP_GET);
-    predef_sysproc("LSL",  SP_LSL);
-    predef_sysproc("LSR",  SP_LSR);
-    predef_sysproc("ASR",  SP_ASR);
-    predef_sysproc("ROR",  SP_ROR);
-    predef_sysproc("AND",  SP_AND);
-    predef_sysproc("IOR",  SP_IOR);
-    predef_sysproc("XOR",  SP_XOR);
+    /* SYSTEM compiler intrinsics — accessible ONLY via SYSTEM.xxx qualified access.
+       Rule: any intrinsic defined conceptually in SYSTEM must NOT be pre-declared
+       with a bare name; it is registered under "SYSTEM.Name" so that the
+       SYSTEM.xxx dot branch (def_key lookup) finds it, but bare Name() fails.
+       This enforces that callers must write SYSTEM.LSL(x,n) not LSL(x,n). */
+    predef_sysproc("SYSTEM.LSL",  SP_LSL);
+    predef_sysproc("SYSTEM.LSR",  SP_LSR);
+    predef_sysproc("SYSTEM.ASR",  SP_ASR);
+    predef_sysproc("SYSTEM.ROR",  SP_ROR);
+    predef_sysproc("SYSTEM.AND",  SP_AND);
+    predef_sysproc("SYSTEM.IOR",  SP_IOR);
+    predef_sysproc("SYSTEM.XOR",  SP_XOR);
 
     /* SYSTEM: always implicitly available (never listed in IMPORT).
        Pre-declared in universe so SYSTEM.Foo qualified access works. */

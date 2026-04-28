@@ -45,8 +45,6 @@
 #define SP_FLOOR  10
 #define SP_DISPOSE 11  /* SYSTEM extension: free a heap pointer */
 /* SYSTEM compiler intrinsic IDs (qualified via SYSTEM.xxx, not in SYSTEM.def) */
-#define SP_VAL    13   /* SYSTEM.VAL(T,x)    -> T        */
-#define SP_GET    14   /* SYSTEM.GET(a,v)    procedure   */
 #define SP_LSL    21   /* SYSTEM.LSL(x,n)    -> INTEGER  logical shift left  */
 #define SP_LSR    24   /* SYSTEM.LSR(x,n)    -> INTEGER  logical shift right */
 #define SP_ASR    22   /* SYSTEM.ASR(x,n)    -> INTEGER  arithmetic shift right */

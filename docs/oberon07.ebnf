@@ -218,7 +218,8 @@ FPSection   = [ "VAR" ] ident { "," ident } ":" type   (* typed VAR or value par
    Typeless VAR (no ": type"): callee receives the ADDRESS of the actual argument.
      The parameter has type ADDRESS inside the procedure body.
      Caller auto-computes the address (same as ADR(actual)).
-     SYSTEM.GET/PUT/MOVE/FILL accept full ADDRESS (any segment); use SYSTEM.ADR(actual) to pass.
+     SYSTEM.MOVE/FILL accept full ADDRESS (any segment); use SYSTEM.ADR(actual) to pass.
+     Use POINTER TO T and p^ to read/write memory through an ADDRESS.
      Procedure names are also accepted: SYSTEM.ADR(P) pushes CS:code_offset of P.
      Extension inspired by Turbo Pascal; not in standard Oberon-07. *)
 
@@ -389,21 +390,20 @@ ProcCallExpr = designator "(" [ ActualParams ] ")" .
 (* Function call as expression; result type is the procedure's return type.
    Call through procedure variable: CALL FAR [BP+ofs] or CALL FAR [mem]. *)
 
-SysIntrinsicExpr = SysIdent "(" SysArgs ")" .
-(* SYSTEM intrinsics used as expressions (via SYSTEM.xxx qualified name): *)
+SysIntrinsicExpr = "SYSTEM" "." SysIdent "(" SysArgs ")" .
+(* SYSTEM intrinsics used as expressions — MUST use SYSTEM.xxx qualified name.
+   Bare LSL(x,n) etc. are NOT valid — compiler error "undefined identifier".
+   Rule: SYSTEM-specific intrinsics are NOT pre-declared with bare names; only
+   SYSTEM.Name form is accepted. *)
 
-SysIdent    = "VAL" | "LSL" | "LSR" | "ASR" | "ROR" | "AND" | "IOR" | "XOR" .
-(* VAL(T, x)  → T: bit-reinterpret x as type T (sizes must match). Compiler built-in.
-   LSL(x, n)  → same type: logical shift left.   Compiler built-in (INTEGER/LONGINT dispatch).
+SysIdent    = "LSL" | "LSR" | "ASR" | "ROR" | "AND" | "IOR" | "XOR" .
+(* LSL(x, n)  → same type: logical shift left.   Compiler built-in (INTEGER/LONGINT dispatch).
    LSR(x, n)  → same type: logical shift right.  Compiler built-in.
    ASR(x, n)  → same type: arithmetic shift right. Compiler built-in.
    ROR(x, n)  → same type: rotate right.         Compiler built-in.
    AND(x, y)  → INTEGER or LONGINT: bitwise AND. BYTE/INTEGER→INTEGER, LONGINT→LONGINT.
    IOR(x, y)  → INTEGER or LONGINT: bitwise OR.  BYTE/INTEGER→INTEGER, LONGINT→LONGINT.
    XOR(x, y)  → INTEGER or LONGINT: bitwise XOR. BYTE/INTEGER→INTEGER, LONGINT→LONGINT. *)
-
-(* SYSTEM statement intrinsic (compiler built-in, requires typed designator store): *)
-(* GET(src: ADDRESS; VAR dst)  — read word from far pointer src into dst (any segment). *)
 
 (* The following are INLINE procedures in SYSTEM.mod (typeless VAR, POP-based): *)
 (* ADR(VAR v): ADDRESS    — POP AX=offset, POP DX=segment; result DX:AX = far address of v.
@@ -412,11 +412,13 @@ SysIdent    = "VAL" | "LSL" | "LSR" | "ASR" | "ROR" | "AND" | "IOR" | "XOR" .
 (* SEG(VAR v): INTEGER    — POP AX (discard offset), POP AX=segment; result AX = segment of v. *)
 (* OFS(VAR v): INTEGER    — POP AX=offset, POP CX (discard segment); result AX = offset of v. *)
 (* PTR(s, o: INTEGER): ADDRESS — POP AX=o (offset), POP DX=s (segment); result DX:AX. *)
-(* PUT(a: ADDRESS; x: INTEGER) — POP AX=x, POP BX=offset, POP ES=segment; MOV ES:[BX],AX. *)
 (* MOVE(VAR src, dst; n: INTEGER) — POP-based inline: REP MOVSB copy (any segment). *)
 (* FILL(VAR dst; n: INTEGER; b: BYTE) — POP-based inline: REP STOSB fill (any segment). *)
 (* PORTOUT(port: INTEGER; val: BYTE) — POP-based inline: OUT DX, AL. *)
 (* PORTIN(port: INTEGER; VAR val: BYTE) — POP-based inline: IN AL, DX; MOV ES:[BX], AL. *)
+(* Note: SYSTEM.GET, SYSTEM.PUT, and SYSTEM.VAL are NOT available in this dialect.
+         Use POINTER TO T and p^ to read/write through an ADDRESS value.
+         Use standard type casts INTEGER(x), BYTE(x), CHR(x), ORD(x) instead of VAL. *)
 
 
 (* ---- DESIGNATOR ---- *)

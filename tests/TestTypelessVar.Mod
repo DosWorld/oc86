@@ -9,37 +9,36 @@ VAR failed: INTEGER;
 PROCEDURE Fail(n: INTEGER);
 BEGIN Out.String("FAIL "); Out.Int(n, 0); Out.Ln; INC(failed) END Fail;
 
-(* Callee receives the ADDRESS (DS-relative offset) of the actual argument *)
-PROCEDURE GetAddr(VAR p): ADDRESS;
+(* Callee receives the ADDRESS (far pointer) of the actual argument *)
+PROCEDURE GetAddr(VAR p): SYSTEM.ADDRESS;
 BEGIN RETURN p END GetAddr;
 
-(* Write an INTEGER through a typeless VAR address (DS-relative only) *)
+(* Write an INTEGER through a typeless VAR address *)
 PROCEDURE WriteInt(VAR p; val: INTEGER);
-VAR a: ADDRESS;
-BEGIN a := p; SYSTEM.PUT(a, val) END WriteInt;
+VAR ip: POINTER TO INTEGER;
+BEGIN ip := p; ip^ := val END WriteInt;
 
-(* Read an INTEGER through a typeless VAR address (DS-relative only) *)
+(* Read an INTEGER through a typeless VAR address *)
 PROCEDURE ReadInt(VAR p): INTEGER;
-VAR a: ADDRESS; v: INTEGER;
-BEGIN a := p; SYSTEM.GET(a, v); RETURN v END ReadInt;
+VAR ip: POINTER TO INTEGER;
+BEGIN ip := p; RETURN ip^ END ReadInt;
 
-(* Swap two integers via their DS-relative typeless VAR addresses *)
+(* Swap two integers via their typeless VAR addresses *)
 PROCEDURE SwapInt(VAR a; VAR b);
-VAR aa, bb: ADDRESS; tmp: INTEGER;
+VAR tmp: INTEGER;
 BEGIN
-    aa := a; bb := b;
-    SYSTEM.GET(aa, tmp);
-    SYSTEM.PUT(aa, ReadInt(b));
-    SYSTEM.PUT(bb, tmp)
+    tmp := ReadInt(a);
+    WriteInt(a, ReadInt(b));
+    WriteInt(b, tmp)
 END SwapInt;
 
 (* Count calls — callee accumulates into a typeless VAR counter *)
 PROCEDURE Bump(VAR counter);
-VAR a: ADDRESS; v: INTEGER;
-BEGIN a := counter; SYSTEM.GET(a, v); INC(v); SYSTEM.PUT(a, v) END Bump;
+VAR ip: POINTER TO INTEGER;
+BEGIN ip := counter; INC(ip^) END Bump;
 
 PROCEDURE RunAllTests*;
-VAR addr1, addr2: ADDRESS;
+VAR addr1, addr2: SYSTEM.ADDRESS;
     lInt: INTEGER;
 BEGIN
     failed := 0;
@@ -63,7 +62,7 @@ BEGIN
     WriteInt(gInt, 77);
     IF gInt # 77 THEN Fail(4) END;
 
-    (* Test 5: GetAddr on local returns non-zero address (SS-relative) *)
+    (* Test 5: GetAddr on local returns non-zero address *)
     lInt := 55;
     addr1 := GetAddr(lInt);
     IF addr1 = 0 THEN Fail(5) END;
@@ -87,7 +86,7 @@ BEGIN
 
     (* Test 9: multiple typeless VAR params, mixed with typed params *)
     gInt := 5; gInt2 := 7;
-    WriteInt(gInt, ReadInt(gInt2));   (* gInt := gInt2 via addresses *)
+    WriteInt(gInt, ReadInt(gInt2));
     IF gInt # 7 THEN Fail(9) END;
 
     Out.String("Failed: "); Out.Int(failed, 0); Out.Ln

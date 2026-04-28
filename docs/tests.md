@@ -58,6 +58,30 @@ Executable tests catch real runtime bugs, survive code-generator refactors witho
 
 ---
 
+## SYSTEM intrinsics tests (test_system_intrinsics.sh)
+
+`tests/test_system_intrinsics.sh` — 28 compile-level checks for SYSTEM pseudo-module
+intrinsics, byte patterns, and rule enforcement. Key areas:
+
+| Test | What it checks |
+|------|----------------|
+| T1 | Basic module with POINTER compiles |
+| T2/T2b | SYSTEM.ADR emits correct push+INLINE pattern (1E 50 58 5A); ADR(proc) emits PUSH CS + MOV AX |
+| T3/T4 | POINTER TO T deref write/read compile |
+| T5/T6 | SYSTEM_VAL, SYSTEM_GET, SYSTEM_PUT absent from SYSTEM.DEF (removed from dialect) |
+| T7–T10 | MOVE/PTR/SEG/OFS/FILL compile and emit correct byte patterns |
+| T11 | ADR(constant) gives compile error |
+| T12 | Missing import gives named error, no output file |
+| T13 | Module with parseable but corrupt .def compiles |
+| T14/T15 | CLD precedes REP MOVSB and REP STOSB |
+| T16 | SYSTEM.SEG(local) emits SS-relative push pattern (16 50 58 58) |
+| T17/T17b | **Rule:** bare `LSL(x,n)` is rejected; `SYSTEM.LSL(x,n)` compiles (SYSTEM intrinsics require qualified access) |
+
+**Rule enforced by T17:** SYSTEM-specific intrinsics (LSL, LSR, ASR, ROR, AND, IOR, XOR)
+are NOT pre-declared with bare names. Only `SYSTEM.Name(...)` qualified form is accepted.
+
+---
+
 ## Integration tests (test_src.sh)
 
 `tests/test_src.sh` compiles Oberon source files and checks the output binary for
@@ -215,9 +239,9 @@ heap-allocated extended records, self-referential pointer types and linked-list 
 
 **TestAdrParam.Mod** (section 32): `SYSTEM.ADR` applied to procedure parameters — ADR of
 non-VAR parameter (returns slot address, non-zero), ADR of VAR parameter (returns caller's
-variable address, equals direct ADR), write through VAR-param ADR using `SYSTEM.PUT` on a
-global variable, ADR of global via VAR parameter. `SYSTEM.PUT` accepts any full ADDRESS
-(far pointer); `SYSTEM.ADR` returns the correct segment for all variable forms.
+variable address, equals direct ADR), write through VAR-param ADR using `POINTER TO INTEGER`
+deref, ADR of global via VAR parameter. `SYSTEM.ADR` returns the correct segment for all
+variable forms.
 
 **TestPointers.Mod** (section 33): Pointer correctness — NIL check before/after NEW/DISPOSE;
 pointer-to-record field read/write; pointer-to-array element access; pointer-to-CHAR array;
@@ -253,7 +277,7 @@ field round-trips, `SYSTEM.Intr` (INT 21h write-char), `NEW(addr, n)` / `DISPOSE
 
 **TestSysIntrinsics.Mod** (section 45): Runtime behaviour of SYSTEM intrinsics across all
 variable forms — global, local, VAR param, non-VAR param, and pointer dereference (`p^`).
-32 checks covering:
+Covers:
 - `SYSTEM.SEG`: global → DS; local → SS (≠ DS in large model); VAR param returns caller's
   segment (DS for global actual, SS for local actual); non-VAR param → SS (value copy);
   `p^` → heap segment (non-zero, stable across calls).
@@ -264,19 +288,19 @@ variable forms — global, local, VAR param, non-VAR param, and pointer derefere
   MOVE accepts two far pointers; saves/restores DS around REP MOVSB.
 - `SYSTEM.FILL`: zero-fill global array; fill with non-zero byte (verify word value);
   fill via VAR param destination.
-- `SYSTEM.PUT`/`GET`: round-trip on global using `OFS`+`PTR`; `p^` readable after
-  `SEG`/`OFS` calls; `SEG(p^)` is non-zero.
-- `SYSTEM.VAL`: `BYTE`↔`CHAR` reinterpretation.
+- `PTR` + pointer dereference: write/read global via `PTR(SEG, OFS)` and `POINTER TO T`;
+  `p^` readable after `SEG`/`OFS` calls; `SEG(p^)` is non-zero.
+Note: `SYSTEM.GET`, `SYSTEM.PUT`, and `SYSTEM.VAL` are not available in this dialect.
 
 **TestTypelessVar.Mod** (section 46): Typeless VAR parameters — `VAR p` without `: type`
 in a formal parameter list. Covers: `GetAddr(VAR p): ADDRESS` returns non-zero address for
 global, returns distinct addresses for two distinct globals, address is stable across repeated
-calls; `ReadInt(VAR p): INTEGER` reads a global via typeless VAR address; `WriteInt(VAR p; val)` writes
-a global via typeless VAR address; `GetAddr` on a local variable (SS-relative) returns non-zero;
-`SwapInt(VAR a; VAR b)` forwards two typeless VAR params to a third proc and swaps two globals;
-`Bump(VAR counter)` increments a global through a typeless VAR address three times;
-cross-proc address relay (WriteInt+ReadInt chain for two distinct globals).
-`SYSTEM.PUT`/`GET` accept any full ADDRESS (far pointer); all segments are valid (DS, SS, heap).
+calls; `ReadInt(VAR p): INTEGER` reads a global via `POINTER TO INTEGER` deref;
+`WriteInt(VAR p; val)` writes a global via `POINTER TO INTEGER` deref; `GetAddr` on a local
+variable (SS-relative) returns non-zero; `SwapInt(VAR a; VAR b)` forwards two typeless VAR
+params to a third proc and swaps two globals; `Bump(VAR counter)` increments a global through
+a pointer deref three times; cross-proc address relay (WriteInt+ReadInt chain for two distinct
+globals). Uses `POINTER TO T` and `p^` to read/write through ADDRESS values.
 
 **TestNearFar.Mod** (section 36): FAR/NEAR calling convention at runtime — NEAR proc called
 correctly (RET, params at [BP+4]); FAR proc called correctly (RETF, params at [BP+6]);

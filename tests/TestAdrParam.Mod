@@ -50,10 +50,10 @@ END AdrOfVarParam;
 
 (* Write to a variable through its address obtained via VAR param ADR *)
 PROCEDURE WriteViaAdr(VAR v: INTEGER; val: INTEGER);
-VAR a: SYSTEM.ADDRESS;
+VAR ip: POINTER TO INTEGER;
 BEGIN
-  a := SYSTEM.ADR(v);
-  SYSTEM.PUT(a, val)
+  ip := SYSTEM.ADR(v);
+  ip^ := val
 END WriteViaAdr;
 
 PROCEDURE TestNonVarParam;
@@ -85,8 +85,6 @@ BEGIN
 END TestVarParam;
 
 PROCEDURE TestWriteViaVarParamAdr;
-(* Use global gX: ADR is DS-relative so SYSTEM.PUT works correctly.
-   SYSTEM.PUT on SS-relative (local) addresses is not supported (large model DS#SS). *)
 BEGIN
   BeginTest("Write via ADR of VAR parameter (global)");
   gX := 0;
@@ -102,7 +100,7 @@ BEGIN
   gX := 0;
   adrVia := AdrOfVarParam(gX);
   Check("adr non-zero", adrVia # 0);
-  SYSTEM.PUT(adrVia, 4321);
+  WriteViaAdr(gX, 4321);
   IF gX # 4321 THEN Fail("global write via VAR ADR", gX, 4321) END;
   EndTest
 END TestGlobalVarParam;

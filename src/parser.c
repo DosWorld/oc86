@@ -762,19 +762,6 @@ void parse_sysproc_call(int id) {
         cg_patch_near(&ok);
         break;
     }
-    case SP_GET: {
-        /* SYSTEM.GET(src: ADDRESS; VAR dst): load one word from far pointer src into dst.
-           src is any ADDRESS expression (seg:ofs); works with heap, stack, data segment. */
-        Item addr_it, var_it;
-        parse_expr(&addr_it); cg_load_item(&addr_it); /* DX:AX = far ptr */
-        cg_emit2(0x8E, 0xC2);        /* MOV ES, DX */
-        cg_emit2(0x8B, 0xD8);        /* MOV BX, AX */
-        expect(T_COMMA);
-        parse_designator(&var_it);
-        cg_emit3(OP_ES_PFX, 0x8B, 0x07); /* MOV AX, ES:[BX] */
-        cg_store_item(&var_it);
-        break;
-    }
     default:
         error("unsupported built-in statement");
         break;
@@ -1247,6 +1234,15 @@ void parse_type_decl(void) {
         s->type = placeholder; s->exported = exported;
         expect(T_EQL);
         t = type_integer; parse_type(&t);
+        /* TYPE T = T: parse_type resolved to our own placeholder (self-alias).
+           Search outer scopes to find the pre-declared type (e.g. ADDRESS). */
+        if (t == placeholder) {
+            Scope *sc2; Symbol *s2;
+            for (sc2 = top_scope->outer; sc2 && t == placeholder; sc2 = sc2->outer)
+                for (s2 = sc2->symbols; s2; s2 = s2->next)
+                    if (strcmp(s2->name, name) == 0 && s2->kind == K_TYPE)
+                        { t = s2->type; break; }
+        }
         /* Patch placeholder in-place so any captured pointers see the real type. */
         memcpy(placeholder, t, sizeof(*placeholder));
         /* Redirect forward-ref entries that point to t (a stub created during

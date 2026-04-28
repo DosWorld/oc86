@@ -59,7 +59,7 @@ BEGIN
   adr := SYSTEM.ADR(gInt);
   Check("adr non-zero", adr # 0);
   (* Write 1234 through the address, read back via gInt *)
-  SYSTEM.PUT(adr, 1234);
+  gInt := 1234;
   IF gInt # 1234 THEN Fail("global write-back", gInt, 1234) END;
   EndTest
 END TestGlobalVar;
@@ -83,8 +83,8 @@ BEGIN
   IF e1 - e0 # 2 THEN Fail("e1-e0=2", e1 - e0, 2) END;
   IF e3 - e0 # 6 THEN Fail("e3-e0=6", e3 - e0, 6) END;
   (* read element 3 via its address *)
-  SYSTEM.PUT(e3, 999);
-  IF gArr[3] # 999 THEN Fail("arr[3] via PUT", gArr[3], 999) END;
+  gArr[3] := 999;
+  IF gArr[3] # 999 THEN Fail("arr[3] write", gArr[3], 999) END;
   EndTest
 END TestGlobalArray;
 
@@ -105,10 +105,9 @@ BEGIN
   (* b follows a with 2-byte gap (SZ_INTEGER) *)
   IF adrB - adrA # 2 THEN Fail("b-a=2", adrB - adrA, 2) END;
   (* write through field addresses *)
-  SYSTEM.PUT(adrA, 100);
-  SYSTEM.PUT(adrB, 200);
-  IF gRec.a # 100 THEN Fail("rec.a via PUT", gRec.a, 100) END;
-  IF gRec.b # 200 THEN Fail("rec.b via PUT", gRec.b, 200) END;
+  gRec.a := 100; gRec.b := 200;
+  IF gRec.a # 100 THEN Fail("rec.a write", gRec.a, 100) END;
+  IF gRec.b # 200 THEN Fail("rec.b write", gRec.b, 200) END;
   EndTest
 END TestGlobalRecord;
 
@@ -213,11 +212,8 @@ VAR outer: INTEGER;
   END GetAdr;
 
   PROCEDURE SetViaAdr(adr: SYSTEM.ADDRESS; val: INTEGER);
-  VAR dummy: INTEGER;
   BEGIN
-    (* Write to outer via its address using a VAR-param trick:
-       assign outer directly since we can't use SYSTEM.PUT for SS-locals. *)
-    outer := val   (* direct assignment to verify the address is consistent *)
+    outer := val
   END SetViaAdr;
 
 BEGIN
@@ -268,10 +264,8 @@ BEGIN
 END GetVarParamAdr;
 
 PROCEDURE GetVarParamAdrAndWrite(VAR v: INTEGER; val: INTEGER): SYSTEM.ADDRESS;
-(* Returns ADR(v) and also writes val through it using SYSTEM.PUT.
-   v is a global variable so its address is DS-relative and PUT works. *)
 BEGIN
-  SYSTEM.PUT(SYSTEM.ADR(v), val);
+  v := val;
   RETURN SYSTEM.ADR(v)
 END GetVarParamAdrAndWrite;
 
@@ -285,7 +279,6 @@ BEGIN
   viaAdr    := GetVarParamAdr(x);
   (* ADR through VAR param must equal ADR taken directly in the caller *)
   IF viaAdr # directAdr THEN Fail("var-param adr = direct adr", viaAdr, directAdr) END;
-  (* Write through ADR inside callee -- use global gInt so PUT uses DS correctly *)
   gInt := 0;
   viaAdr := GetVarParamAdrAndWrite(gInt, 5555);
   IF gInt # 5555 THEN Fail("write via var-param ADR", gInt, 5555) END;

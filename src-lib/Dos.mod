@@ -357,7 +357,7 @@ END GetIntVec;
 PROCEDURE SetIntVec*(IntNo: BYTE; Vector: SYSTEM.ADDRESS);
   VAR r: SYSTEM.Registers; p: POINTER TO CHAR;
 BEGIN
-  p := SYSTEM.VAL(POINTER TO CHAR, Vector);
+  p := Vector;
   r.AX := 2500H + IntNo;
   r.DS := SYSTEM.SEG(p^);
   r.DX := SYSTEM.OFS(p^);

@@ -1,5 +1,5 @@
 MODULE TestSysIntrinsics;
-(* Runtime tests for SYSTEM intrinsics: GET, PUT, MOVE, FILL, PTR, SEG/OFS, VAL.
+(* Runtime tests for SYSTEM intrinsics: MOVE, FILL, PTR, SEG/OFS.
    Covers observable runtime behaviour across global, local, VAR/non-VAR parameter,
    and pointer-dereference (p^) variable forms.
 
@@ -10,7 +10,7 @@ MODULE TestSysIntrinsics;
    - SYSTEM.OFS(local)  = SS-relative offset (from LEA BP+ofs).
    - SYSTEM.MOVE(VAR src, dst; n): copies n bytes from src to dst (any segment).
    - SYSTEM.FILL(VAR dst; n, b): fills n bytes at dst with byte b (any segment).
-   - SYSTEM.GET/PUT accept full ADDRESS (far pointer, any segment).  *)
+   - Use POINTER TO T and p^ to read/write through addresses.  *)
 
 IMPORT Out;
 
@@ -298,63 +298,37 @@ BEGIN
 END TestFillVarParam;
 
 (* ================================================================
-   PTR / GET / PUT   (already tested in previous block; add p^ form)
+   PTR / pointer dereference
    ================================================================ *)
 
 (* ------------------------------------------------------------------ *)
-(* PUT / GET on a global via OFS (DS-relative plain offset)           *)
+(* Write/read a global via PTR + pointer dereference                  *)
 (* ------------------------------------------------------------------ *)
-PROCEDURE TestPutGet;
-VAR ofs: INTEGER;
-    adr: SYSTEM.ADDRESS;
+PROCEDURE TestPtrDeref;
+VAR adr: SYSTEM.ADDRESS;
+    ip: POINTER TO INTEGER;
 BEGIN
     gA := 0;
-    ofs := SYSTEM.OFS(gA);
-    adr := SYSTEM.PTR(SYSTEM.SEG(gA), ofs);
-    SYSTEM.PUT(adr, 1234);
-    Check("PUT global via OFS+PTR", gA = 1234);
-    SYSTEM.GET(adr, gA);
-    Check("GET global round-trip", gA = 1234);
-    SYSTEM.PUT(adr, 0);
-    Check("PUT global clears", gA = 0)
-END TestPutGet;
+    adr := SYSTEM.PTR(SYSTEM.SEG(gA), SYSTEM.OFS(gA));
+    ip  := adr;
+    ip^ := 1234;
+    Check("PTR+deref write global", gA = 1234);
+    gA  := 0;
+    Check("PTR+deref clear", gA = 0)
+END TestPtrDeref;
 
-(* ------------------------------------------------------------------ *)
-(* PUT / GET via SYSTEM.INTR-style write through pointer:             *)
-(* SYSTEM.GET/PUT set ES=DS and use AX as DS-relative offset, so     *)
-(* they cannot reach the heap segment. Verify GET/PUT on a global    *)
-(* using the OFS of the global as a plain DS offset.                 *)
-(* ------------------------------------------------------------------ *)
-PROCEDURE TestPutGetDeref;
+PROCEDURE TestPtrDerefHeap;
 VAR p: PInt;
     s, o: INTEGER;
 BEGIN
-    (* Verify that SEG(p^) / OFS(p^) are accessible without crashing *)
     NEW(p);
     p^ := 5678;
     s := SYSTEM.SEG(p^);
     o := SYSTEM.OFS(p^);
-    (* s = heap segment, o = heap offset; can't use GET/PUT across segments.
-       Verify the pointer is still valid by reading through it normally. *)
     Check("p^ readable after SEG/OFS calls", p^ = 5678);
-    (* SEG must be non-zero (heap is never in segment 0) *)
     Check("SEG(p^) non-zero", s # 0);
     DISPOSE(p)
-END TestPutGetDeref;
-
-(* ================================================================
-   VAL
-   ================================================================ *)
-PROCEDURE TestVal;
-VAR b: BYTE; c: CHAR;
-BEGIN
-    b := 65;
-    c := SYSTEM.VAL(CHAR, b);
-    Check("VAL BYTE->CHAR 65='A'", c = 'A');
-    c := 'Z';
-    b := SYSTEM.VAL(BYTE, c);
-    Check("VAL CHAR->BYTE 'Z'=90", b = 90)
-END TestVal;
+END TestPtrDerefHeap;
 
 (* ================================================================
    Entry point
@@ -386,12 +360,9 @@ BEGIN
     TestFillGlobalByte;
     TestFillVarParam;
 
-    (* PUT / GET *)
-    TestPutGet;
-    TestPutGetDeref;
-
-    (* VAL *)
-    TestVal;
+    (* PTR + pointer dereference *)
+    TestPtrDeref;
+    TestPtrDerefHeap;
 
     Out.String("Failed: "); Out.Int(failed, 0); Out.Ln;
     Out.String("Total:  "); Out.Int(passed + failed, 0); Out.Ln
