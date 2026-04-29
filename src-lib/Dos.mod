@@ -181,14 +181,6 @@ BEGIN
     END
 END ParamStr;
 
-PROCEDURE Up(c: CHAR): CHAR;
-BEGIN
-    IF (c >= 'a') & (c <= 'z') THEN
-        c := CHR(ORD(c) - 32)
-    END;
-    RETURN c
-END Up;
-
 PROCEDURE GetEnv*(envvar: ARRAY OF CHAR; VAR dst: ARRAY OF CHAR);
 VAR
     envseg : INTEGER;
@@ -199,7 +191,8 @@ VAR
     match  : BOOLEAN;
 BEGIN
     dst[0] := 0X;
-    envseg := ORD(ReadByte(GetPsp(), 2CH)) + ORD(ReadByte(GetPsp(), 2DH)) * 256;
+    envseg := GetPsp();
+    envseg := ORD(ReadByte(envseg, 2CH)) + ORD(ReadByte(envseg, 2DH)) * 256;
     IF envseg = 0 THEN RETURN END;
 
     ofs := 0;
@@ -209,7 +202,7 @@ BEGIN
         ch := ReadByte(envseg, ofs);
         WHILE (ch # '=') & (ch # 0X) DO
             IF (ei < LEN(envvar) - 1) & match THEN
-                match := Up(ch) = Up(envvar[ei]);
+                match := SYSTEM.UCASE(ch) = SYSTEM.UCASE(envvar[ei]);
                 INC(ei)
             ELSE
                 match := FALSE

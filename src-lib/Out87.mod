@@ -89,5 +89,4 @@ BEGIN
   Real(r, w)
 END LongReal;
 
-
 END Out87.

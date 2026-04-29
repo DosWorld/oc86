@@ -691,11 +691,16 @@ void parse_sysproc_call(int id) {
         cg_emit1(OP_PUSH_AX);       /* push sizeInBytes */
         cg_call_far(mAlloc_id);      /* CALL FAR SYSTEM_Alloc; cleans 2 bytes */
         /* For tagged records: write descriptor offset at ES:[BX] (the tag slot),
-           then advance AX by 2 so the returned pointer points to the record data. */
+           then advance AX by 2 so the returned pointer points to the record data.
+           Skip if SYSTEM_Alloc returned NIL (DX:AX == 0:0). */
         if (is_tagged_rec) {
+            Backpatch bp_nil;
+            cg_emit2(0x85, 0xD2);                           /* TEST DX, DX (ZF if DX==0 = NIL) */
+            cg_cond_short(0x74, &bp_nil);                   /* JZ .skip (if NIL, jump) */
             cg_dxax_to_esbx();                              /* ES:BX = raw block start */
             cg_store_word_esbx_imm(ptr.type->base->desc_ofs); /* ES:[BX] = desc_ofs */
             cg_emit2(0x40, 0x40);                           /* INC AX / INC AX  (+2) */
+            cg_patch_short(&bp_nil);                        /* .skip: */
         }
         /* Result: DX:AX = far pointer to record data; store into ptr variable */
         cg_store_item(&ptr);
@@ -714,8 +719,15 @@ void parse_sysproc_call(int id) {
            Push far pointer {segment, offset} as 4-byte arg. */
         mFree_id = get_system_import("SYSTEM_Free");
         cg_load_item(&ptr);  /* DX:AX = far pointer (ptr type) */
-        /* For tagged records: subtract 2 from offset to get original block start */
-        if (is_tagged_rec) cg_emit3(0x83, 0xE8, 0x02);  /* SUB AX, 2 */
+        /* For tagged records: subtract 2 from offset to get original block start,
+           but skip if pointer is NIL (DX:AX == 0:0). */
+        if (is_tagged_rec) {
+            Backpatch bp_nil;
+            cg_emit2(0x85, 0xD2);          /* TEST DX, DX  (ZF if DX==0 = NIL) */
+            cg_cond_short(0x74, &bp_nil);  /* JZ .skip     (NIL → skip SUB) */
+            cg_emit3(0x83, 0xE8, 0x02);   /* SUB AX, 2    (back to raw block start) */
+            cg_patch_short(&bp_nil);       /* .skip: */
+        }
         /* Push as 4-byte arg: segment first (higher address), offset second */
         cg_emit1(OP_PUSH_DX);  /* PUSH DX (segment) */
         cg_emit1(OP_PUSH_AX);  /* PUSH AX (offset)  */

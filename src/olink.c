@@ -711,6 +711,35 @@ void olink_calculate_layout(LinkerState *ls)
     uint16_t group_para;
     int cur_group;
     uint32_t group_end;
+    TSymbol *entry_sym;
+    int entry_group;
+
+    /* Move the entry group to the front of the module list so that the
+       entry .om always occupies the lowest code addresses regardless of
+       the argument order on the command line. */
+    entry_sym = find_symbol(ls, "start");
+    if (entry_sym && entry_sym->owner) {
+        TModule *prev = NULL, *cur2;
+        entry_group = entry_sym->owner->group_id;
+        /* find the first module with entry_group */
+        cur2 = ls->mod_head;
+        while (cur2 && cur2->group_id != entry_group) {
+            prev = cur2;
+            cur2 = cur2->next;
+        }
+        if (cur2 && prev) {
+            /* detach the contiguous run of entry_group modules */
+            TModule *run_head = cur2;
+            TModule *run_tail = cur2;
+            while (run_tail->next && run_tail->next->group_id == entry_group)
+                run_tail = run_tail->next;
+            /* splice out: prev -> run_tail->next */
+            prev->next = run_tail->next;
+            /* prepend: run_head..run_tail -> old head */
+            run_tail->next = ls->mod_head;
+            ls->mod_head = run_head;
+        }
+    }
 
     /* Walk modules in scan order.  For each group (consecutive same group_id
        among used modules), paragraph-align the group start, pack members with
@@ -739,7 +768,8 @@ void olink_calculate_layout(LinkerState *ls)
             n = n->next;
         }
         group_end = code_base;
-        (void)group_end;
+        if (group_end - group_code_start > 65000u)
+            olink_error("code group exceeds 64KB");
 
         /* Assign data/bss offsets for the same group members. */
         n = m;
@@ -790,7 +820,9 @@ void olink_perform_linking(LinkerState *ls)
     TSymbol *sym;
 
     /* allocate segment buffers */
-    if (ls->total_code_len > 65000u) olink_error("code segment too large");
+    /* Note: total_code_len may exceed 64KB — each .om group has its own CS paragraph.
+       Validate per-group size during layout (see olink_calculate_layout).
+       Data is combined into one 16-bit segment, so that limit is real. */
     if (ls->total_data_len > 65000u) olink_error("data segment too large");
     ls->code_buf = (uint8_t *)malloc(ls->total_code_len ? (size_t)ls->total_code_len : 1);
     ls->data_buf = (uint8_t *)malloc(ls->total_data_len ? (size_t)ls->total_data_len : 1);
@@ -982,10 +1014,10 @@ void olink_perform_linking(LinkerState *ls)
                    For code-resident: use the .om group's CS paragraph + offset of the
                    word within that group (final_code_ofs - group_start + rofs).
                    For data-resident: use data segment paragraph. */
-                if (rseg == SEG_CODE)
+                if (rseg == SEG_CODE) {
                     add_reloc(ls, m->group_code_para,
                               (uint16_t)(m->final_code_ofs - ((uint32_t)m->group_code_para << 4) + rofs));
-                else
+                } else
                     add_reloc(ls, (uint16_t)(ls->total_code_len >> 4),
                               (uint16_t)rofs);
                 break;

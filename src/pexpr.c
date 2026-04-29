@@ -220,6 +220,17 @@ void parse_designator(Item *item) {
                     continue;
                 }
 
+                /* Imported VAR: allocate a far-ptr data slot patched by linker */
+                if (def_sym && def_sym->kind == K_VAR) {
+                    id = pe_get_system_import(full_name);
+                    item->mode   = M_GLOBAL;
+                    item->adr    = (int32_t)cg_import_var_slot(id);
+                    item->type   = def_sym->type;
+                    item->is_ref = 1;  /* slot holds far address; deref to get value */
+                    item->is_far = 0;
+                    continue;
+                }
+
                 /* find or add RDOFF import */
                 id = pe_get_system_import(full_name);
                 item->rdoff_id = id;
@@ -317,6 +328,9 @@ void parse_designator(Item *item) {
                 if (item->mode == M_LOCAL && (item->is_ref || item->type->len < 0)) {
                     /* Open-array formal or VAR array param: far ptr at [BP+adr] */
                     cg_les_bx_bp(item->adr);             /* LES BX, [BP+adr] */
+                } else if (item->mode == M_GLOBAL && item->is_ref) {
+                    /* Imported array: far ptr in data slot at [adr] */
+                    cg_les_bx_mem((uint16_t)item->adr);  /* LES BX, [adr] */
                 } else if (item->mode == M_GLOBAL) {
                     cg_load_addr_mem(item->adr);         /* AX = DS offset */
                     cg_emit2(0x8C, 0xDA);                /* MOV DX, DS */
@@ -449,6 +463,13 @@ void parse_actual_params(TypeDesc *proc_type) {
                 cg_emit1(OP_PUSH_AX);                /* PUSH segment */
                 cg_load_bp(arg.adr);                 /* AX = offset word */
                 cg_emit1(OP_PUSH_AX);                /* PUSH offset */
+            } else if (arg.mode == M_LOCAL && arg.type && arg.type->len < 0) {
+                /* Non-VAR open-array formal passed as typeless VAR: the 6-byte slot at
+                   [BP+adr] holds {offset:2, segment:2, LEN:2}. Forward the far ptr. */
+                cg_load_bp((int32_t)(arg.adr + 2));  /* AX = segment word */
+                cg_emit1(OP_PUSH_AX);                /* PUSH segment */
+                cg_load_bp(arg.adr);                 /* AX = offset word */
+                cg_emit1(OP_PUSH_AX);                /* PUSH offset */
             } else if (arg.sl_hops > 0) {
                 cg_sl_addr_ax(arg.sl_hops, arg.adr);
                 /* uplevel var lives in caller's stack frame → SS */
@@ -459,6 +480,12 @@ void parse_actual_params(TypeDesc *proc_type) {
                 /* stack local → SS */
                 cg_emit1(OP_PUSH_SS);    /* PUSH SS  (segment, pushed first = higher addr) */
                 cg_emit1(OP_PUSH_AX);    /* PUSH AX  (offset,  pushed last  = lower addr)  */
+            } else if (arg.mode == M_GLOBAL && arg.is_ref) {
+                /* Imported VAR: data slot holds {offset:2, segment:2}; forward as-is. */
+                cg_load_mem((uint16_t)(arg.adr + 2));  /* AX = segment word */
+                cg_emit1(OP_PUSH_AX);                  /* PUSH segment */
+                cg_load_mem((uint16_t)arg.adr);        /* AX = offset word */
+                cg_emit1(OP_PUSH_AX);                  /* PUSH offset */
             } else if (arg.mode == M_GLOBAL) {
                 cg_load_addr_mem(arg.adr);
                 /* global data → DS */
@@ -489,7 +516,7 @@ void parse_actual_params(TypeDesc *proc_type) {
                               || formal->type->form == TF_BYTE)) {
                 /* Single-char string "X" passed to CHAR/BYTE formal:
                    load the first byte from the data segment as the char value. */
-                if (arg.mode == M_GLOBAL) {
+                if (arg.mode == M_GLOBAL && !arg.is_ref) {
                     cg_load_mem(arg.adr); /* AX = word at data[adr]; AL = first char */
                 } else {
                     cg_load_item(&arg);   /* AX = address; fall back */
@@ -518,7 +545,13 @@ void parse_actual_params(TypeDesc *proc_type) {
                 }
                 cg_emit1(OP_PUSH_AX);   /* PUSH LEN */
                 /* Step 2: push far ptr segment then offset */
-                if (arg.mode == M_GLOBAL) {
+                if (arg.mode == M_GLOBAL && arg.is_ref) {
+                    /* Imported array VAR: slot holds {offset:2, segment:2} */
+                    cg_load_mem((uint16_t)(arg.adr + 2)); /* AX = segment word */
+                    cg_emit1(OP_PUSH_AX);                 /* PUSH segment */
+                    cg_load_mem((uint16_t)arg.adr);       /* AX = offset word */
+                    cg_emit1(OP_PUSH_AX);                 /* PUSH offset */
+                } else if (arg.mode == M_GLOBAL) {
                     /* global array in DS */
                     cg_emit1(OP_PUSH_DS);                /* PUSH DS (segment) */
                     cg_load_addr_mem(arg.adr);           /* AX = DS-relative offset */

@@ -30,48 +30,23 @@ BEGIN
 END StdErr;
 
 PROCEDURE ReadChar*(VAR r: Rider; VAR ch: CHAR);
-  VAR regs: SYSTEM.Registers; buf: CHAR;
 BEGIN
-  buf := 0X;
-  regs.AX := 3F00H;
-  regs.BX := r.handle;
-  regs.CX := 1;
-  regs.DS := SYSTEM.SEG(buf);
-  regs.DX := SYSTEM.OFS(buf);
-  regs.Flags := 0;
-  SYSTEM.Intr(21H, regs);
-  IF (SYSTEM.AND(regs.Flags, SYSTEM.FCarry) # 0) OR (regs.AX = 0) THEN
+  IF SYSTEM.BLOCKREAD(r.handle, ch, 1) = 0 THEN
     r.eof := TRUE;
     ch := 0X
   ELSE
-    ch := buf;
     INC(r.pos)
   END
 END ReadChar;
 
 PROCEDURE WriteChar*(VAR r: Rider; ch: CHAR);
-  VAR regs: SYSTEM.Registers;
 BEGIN
-  regs.AX := 4000H;
-  regs.BX := r.handle;
-  regs.CX := 1;
-  regs.DS := SYSTEM.SEG(ch);
-  regs.DX := SYSTEM.OFS(ch);
-  regs.Flags := 0;
-  SYSTEM.Intr(21H, regs);
-  IF SYSTEM.AND(regs.Flags, SYSTEM.FCarry) = 0 THEN
-    INC(r.pos)
-  END
+  IF SYSTEM.BLOCKWRITE(r.handle, ch, 1) = 1 THEN INC(r.pos) END
 END WriteChar;
 
 PROCEDURE WriteStr*(VAR r: Rider; s: ARRAY OF CHAR);
-  VAR i: INTEGER;
 BEGIN
-  i := 0;
-  WHILE (i < LEN(s)) & (s[i] # 0X) DO
-    WriteChar(r, s[i]);
-    INC(i)
-  END
+  INC(r.pos, SYSTEM.BLOCKWRITE(r.handle, s, SYSTEM.LENGTH(s)))
 END WriteStr;
 
 PROCEDURE WriteInt*(VAR r: Rider; n: LONGINT);

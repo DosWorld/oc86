@@ -5,6 +5,10 @@ Summary
 -------
 `oc86` is a C89 compiler for the Oberon-07 language that targets MS-DOS real-mode large memory model (CS≠DS≠SS). It produces RDOFF2 object files and `.om` archive libraries, which are linked into DOS MZ executables by the bundled `olink` smart linker. The toolchain runs on Linux/macOS (GCC/Clang) for development and can also be compiled by Open Watcom for native DOS use.
 
+**Self-hosting status:** Stage 2 complete (2026-04-29). All 11 compiler modules ported to Oberon
+and compiled by the C89 bootstrap. The self-hosted Oberon compiler sources live in `src-ob/oc/`.
+Stage 3 (porting the linker, `src-ob/olink/`) is next.
+
 Key features
 ------------
 - Full Oberon-07 subset with practical extensions (see "Language extensions" below).
@@ -18,7 +22,7 @@ Key features
 - Nested procedures with full static-link uplevel variable access (up to 3 hops).
 - Dynamic allocation: NEW/DISPOSE with typed and sized variants; ADDRESS far pointers.
 - Forward and self-referential POINTER TO RECORD types within a TYPE section.
-- SYSTEM intrinsics: GET, PUT, MOVE, FILL, ADR, SEG, OFS, VAL, PTR, LSL, LSR, ASR, ROR, PORTOUT, PORTIN.
+- SYSTEM intrinsics: MOVE, FILL, ADR, SEG, OFS, PTR, LSL, LSR, ASR, ROR (compiler built-ins); PORTOUT/PORTIN as INLINE procs in SYSTEM.mod. Note: VAL, GET, PUT removed from dialect; use `POINTER TO T` and `p^` instead.
 - EXTERNAL procedure declarations (body provided by an external .rdf at link time).
 - $L directive to pack hand-assembled .rdf files into .om archives.
 - $M directive to declare stack size; stored as `META-INF/STACK.TXT` in the `.om` when using `-entry`.
@@ -57,7 +61,8 @@ oberonc/
   lib/          Compiled library output (built by src-lib/Makefile install)
   tests/        Unit test sources (.c) and integration test modules (.Mod)
   docs/         Grammar, ABI, build and linker reference
-  src-ob/       Self-hosted compiler and linker in progress (Oberon sources)
+  src-ob/oc/    Self-hosted Oberon compiler (Stage 2 complete; 11 modules)
+  src-ob/olink/ Self-hosted Oberon linker (Stage 3, in progress)
   CLAUDE.md     Developer guide for Claude Code sessions
   MANUAL.MD     Programmer manual: dialect, ABI, calling conventions, open arrays
 ```
@@ -88,7 +93,7 @@ Build:
 
 ```sh
 make            # build oc and olink, compile and install all libraries to lib/
-make test       # full clean + rebuild + run all 825 tests
+make test       # full clean + rebuild + run all tests
 ```
 
 Build for DOS (Open Watcom):
@@ -147,20 +152,20 @@ DOS real-mode large model: CS≠DS≠SS. The linker places all modules' data in 
 
 Test suite
 ----------
-825 tests across 8 suites:
+853 tests across 8 suites:
 
 | Suite                       | Count | What it covers |
 |-----------------------------|-------|----------------|
 | test_scanner.c (unit)       | 94    | Tokens, keywords, literals, comments |
 | test_symbols.c (unit)       | 54    | Scopes, types, BP offsets, arg sizes |
-| test_codegen.c (unit)       | 123   | Exact byte sequences for every codegen path |
+| test_codegen.c (unit)       | 130   | Exact byte sequences for every codegen path |
 | test_rdoff.c (unit)         | 76    | RDOFF2 binary format (IMPORT/GLOBAL/RELOC) |
 | test_tar.c (unit)           | 26    | ustar archive writer |
-| test_def.c (unit)           | 88    | .def writer / reader round-trip |
-| test_src.sh (integration)   | 336   | Compile, link, RDOFF structure, error messages |
+| test_def.c (unit)           | 104   | .def writer / reader round-trip |
+| test_src.sh (integration)   | 341   | Compile, link, RDOFF structure, error messages |
 | test_system_intrinsics.sh   | 28    | SYSTEM intrinsic runtime behaviour |
 
-Executable integration tests (sections 17–55 in test_src.sh) compile Oberon modules with `-entry RunAllTests`, link them, and run them under `xt`. If `xt` is not in PATH those tests are skipped (not failed).
+Executable integration tests (sections 17–59 in test_src.sh) compile Oberon modules with `-entry RunAllTests`, link them, and run them under `xt`. If `xt` is not in PATH those tests are skipped (not failed).
 
 Documentation
 -------------

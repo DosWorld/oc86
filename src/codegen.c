@@ -194,8 +194,14 @@ void cg_jmp_back(uint16_t target) {
 }
 void cg_cond_back(int opcode, uint16_t target) {
     int32_t rel = (int32_t)target - (int32_t)(cg_pc() + 2);
-    assert(rel >= -128 && rel <= 127);
-    cg_emit1((uint8_t)opcode); cg_emit1((uint8_t)(rel & 0xFF));
+    if (rel >= -128 && rel <= 127) {
+        cg_emit1((uint8_t)opcode); cg_emit1((uint8_t)(rel & 0xFF));
+    } else {
+        /* 5-byte: Jcc_inv +3 / JMP NEAR target */
+        cg_emit2((uint8_t)invert_jcc(opcode), 3);
+        cg_emit1(OP_JMP_NEAR);
+        cg_emitw((uint16_t)(target - (uint16_t)(cg_pc() + 2)));
+    }
 }
 
 /* ---- load / store ---- */
@@ -408,6 +414,18 @@ void cg_les_bx_mem(uint16_t data_ofs) {
     patch = cg_pc();
     cg_emitw(data_ofs);
     rdf_add_reloc(&cg_obj, SEG_CODE, patch, 2, SEG_DATA, 0);
+}
+
+/* Allocate a 4-byte far-pointer slot in the data segment, patch it with the
+   imported symbol's address (seg:ofs), and return the slot's data offset.
+   The slot stores {offset:2, segment:2} (little-endian, LES-compatible).
+   Caller sets item->mode = M_GLOBAL, item->adr = returned slot, item->is_ref = 1. */
+uint16_t cg_import_var_slot(int rdoff_id) {
+    uint16_t slot = cg_dpc();
+    cg_emit_data_zero(4);                             /* 4-byte slot: {ofs:2, seg:2} */
+    rdf_add_reloc(&cg_obj, SEG_DATA, slot,   2, (uint16_t)rdoff_id, 0); /* offset word */
+    rdf_add_segreloc(&cg_obj, SEG_DATA, (uint32_t)(slot + 2), (uint16_t)rdoff_id);  /* segment word */
+    return slot;
 }
 
 /* Move far pointer from DX:AX to ES:BX */
@@ -768,7 +786,7 @@ void cg_load_item(Item *item) {
             /* VAR param or array element: 4-byte far address at [BP+adr] */
             cg_les_bx_bp(item->adr);
             if (is_byte) cg_deref_far_byte();
-            else if (is_long) cg_deref_far_long();
+            else if (is_long || is_ptr) cg_deref_far_long();
             else cg_deref_far();
             item->is_ref = 0;
         } else if (is_ptr) {
@@ -792,7 +810,7 @@ void cg_load_item(Item *item) {
         if (item->is_ref) {
             cg_les_bx_mem(item->adr);
             if (is_byte) cg_deref_far_byte();
-            else if (is_long) cg_deref_far_long();
+            else if (is_long || is_ptr) cg_deref_far_long();
             else cg_deref_far();
             item->is_ref = 0;
         } else if (is_ptr) {

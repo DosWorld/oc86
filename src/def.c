@@ -243,15 +243,28 @@ static TypeDesc *resolve_type_name(const char *tname) {
     if (strcmp(tname, "ADDRESS")  == 0) return type_address;
     if (strcmp(tname, "VOID")     == 0) return type_notype;
     if (strcmp(tname, "ARRAY")    == 0) return type_new_array(type_char, -1); /* open ARRAY OF CHAR */
-    /* Try alias-qualified name first (types from this module: alias.shortname) */
-    if (s_cur_alias[0]) {
-        snprintf(qn, sizeof(qn), "%s.%s", s_cur_alias, tname);
-        s = sym_find(qn);
+    /* If tname is already qualified (contains '.'), look it up directly.
+       If not found yet, create a forward RECORD stub so POINTER types are
+       well-formed before the referenced module's def is loaded. */
+    if (strchr(tname, '.')) {
+        s = sym_find(tname);
+        if (s && s->kind == K_TYPE) return s->type;
+        /* Not found: create forward stub so we can form POINTER-to it. */
+        s = sym_new(tname, K_TYPE);
+        s->type     = type_new_record(NULL);
+        s->exported = 1;
+        return s->type;
+    } else {
+        /* Try alias-qualified name first (types from this module: alias.shortname) */
+        if (s_cur_alias[0]) {
+            snprintf(qn, sizeof(qn), "%s.%s", s_cur_alias, tname);
+            s = sym_find(qn);
+            if (s && s->kind == K_TYPE) return s->type;
+        }
+        /* Fall back to plain name (handles pre-loaded imported types) */
+        s = sym_find(tname);
         if (s && s->kind == K_TYPE) return s->type;
     }
-    /* Fall back to plain name (handles pre-loaded imported types) */
-    s = sym_find(tname);
-    if (s && s->kind == K_TYPE) return s->type;
     /* Unknown type name: warn (likely renamed/stale .def) and fall back to INTEGER. */
     fprintf(stderr, "warning: unknown type '%s' in .def, defaulting to INTEGER\n", tname);
     return type_integer;

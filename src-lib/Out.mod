@@ -1,17 +1,16 @@
 (*$R-*)
 MODULE Out;
 
+CONST
+  STDOUT = 1;
+
 PROCEDURE Open*;
 BEGIN
 END Open;
 
 PROCEDURE Char*(ch: CHAR);
-VAR
-  r: SYSTEM.Registers;
 BEGIN
-  r.AX := 0200H;
-  r.DX := ORD(ch);
-  SYSTEM.Intr(21H, r)
+  SYSTEM.DOSCHAR(ch)
 END Char;
 
 PROCEDURE Ln*;
@@ -20,13 +19,8 @@ BEGIN
 END Ln;
 
 PROCEDURE String*(s: ARRAY OF CHAR);
-VAR i: INTEGER;
 BEGIN
-  i := 0;
-  WHILE s[i] # 0X DO
-    Char(s[i]);
-    INC(i)
-  END
+  SYSTEM.BLOCKWRITE(STDOUT, s, SYSTEM.LENGTH(s))
 END String;
 
 PROCEDURE Int*(l: LONGINT; w: INTEGER);

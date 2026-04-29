@@ -2,20 +2,20 @@
 MODULE Strings;
 
 PROCEDURE Length*(s: ARRAY OF CHAR): INTEGER;
-VAR i: INTEGER;
 BEGIN
-  i := 0;
-  WHILE (i < LEN(s)) & (s[i] # 0X) DO
-    INC(i)
-  END;
-  RETURN i
+  RETURN SYSTEM.LENGTH(s)
 END Length;
+
+PROCEDURE NearLength(s: ARRAY OF CHAR): INTEGER; NEAR;
+BEGIN
+  RETURN SYSTEM.LENGTH(s)
+END NearLength;
 
 PROCEDURE Pos*(pat, s: ARRAY OF CHAR; pos: INTEGER): INTEGER;
 VAR i, j, lp, ls: INTEGER; found: BOOLEAN;
 BEGIN
-  lp := Length(pat);
-  ls := Length(s);
+  lp := NearLength(pat);
+  ls := NearLength(s);
   IF lp = 0 THEN RETURN pos END;
   i := pos; found := FALSE;
   WHILE (i <= ls - lp) & ~found DO
@@ -31,7 +31,7 @@ END Pos;
 PROCEDURE Append*(s: ARRAY OF CHAR; VAR d: ARRAY OF CHAR);
 VAR i, j, ld, ls: INTEGER;
 BEGIN
-  i := Length(d);
+  i := NearLength(d);
   ld := LEN(d);
   ls := LEN(s);
   j := 0;
@@ -45,8 +45,8 @@ END Append;
 PROCEDURE Insert*(src: ARRAY OF CHAR; pos: INTEGER; VAR dst: ARRAY OF CHAR);
 VAR sl, dl, i, max: INTEGER;
 BEGIN
-  sl := Length(src);
-  dl := Length(dst);
+  sl := NearLength(src);
+  dl := NearLength(dst);
   max := LEN(dst) - 1;
   IF pos < 0 THEN pos := 0 END;
   IF pos > dl THEN pos := dl END;
@@ -69,7 +69,7 @@ END Insert;
 PROCEDURE Delete*(VAR s: ARRAY OF CHAR; pos, n: INTEGER);
 VAR i, l: INTEGER;
 BEGIN
-  l := Length(s);
+  l := NearLength(s);
   IF pos < 0 THEN pos := 0 END;
   IF pos >= l THEN n := 0 END;
   IF pos + n > l THEN n := l - pos END;
@@ -85,8 +85,8 @@ END Delete;
 PROCEDURE Replace*(src: ARRAY OF CHAR; pos: INTEGER; VAR dst: ARRAY OF CHAR);
 VAR i, sl, dl: INTEGER;
 BEGIN
-  sl := Length(src);
-  dl := Length(dst);
+  sl := NearLength(src);
+  dl := NearLength(dst);
   IF pos < 0 THEN pos := 0 END;
   IF pos > dl THEN pos := dl END;
   i := 0;
@@ -100,7 +100,7 @@ END Replace;
 PROCEDURE Extract*(src: ARRAY OF CHAR; pos, n: INTEGER; VAR dst: ARRAY OF CHAR);
 VAR i, sl: INTEGER;
 BEGIN
-  sl := Length(src);
+  sl := NearLength(src);
   IF pos < 0 THEN pos := 0 END;
   IF pos >= sl THEN n := 0 END;
   IF pos + n > sl THEN n := sl - pos END;
@@ -113,25 +113,22 @@ BEGIN
 END Extract;
 
 PROCEDURE Equal*(a, b: ARRAY OF CHAR): BOOLEAN;
-VAR i: INTEGER;
+VAR i, len: INTEGER;
 BEGIN
   i := 0;
-  WHILE (i < LEN(a)) & (i < LEN(b)) & (a[i] = b[i]) & (a[i] # 0X) DO
+  len := SYSTEM.MIN(LEN(a), LEN(b));
+  WHILE (i < len) & (a[i] = b[i]) & (a[i] # 0X) DO
     INC(i)
   END;
-  RETURN (i < LEN(a)) & (i < LEN(b)) & (a[i] = b[i])
+  RETURN a[i] = b[i]
 END Equal;
 
 PROCEDURE Copy*(src: ARRAY OF CHAR; VAR dst: ARRAY OF CHAR);
-VAR i, max: INTEGER;
+VAR len : INTEGER;
 BEGIN
-  max := LEN(dst) - 1;
-  i := 0;
-  WHILE (i < LEN(src)) & (i < max) & (src[i] # 0X) DO
-    dst[i] := src[i];
-    INC(i)
-  END;
-  dst[i] := 0X
+  len := SYSTEM.MIN(NearLength(src), LEN(dst) - 1);
+  SYSTEM.MOVE(src, dst, len);
+  dst[len] := 0X
 END Copy;
 
 END Strings.

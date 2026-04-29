@@ -81,7 +81,7 @@ void cg_cond_near(int opcode, Backpatch *bp);   /* inv+3 / E9 rel16 — ALL forw
 void cg_patch_short(Backpatch *bp);        /* patch EB/7x backward jump */
 void cg_patch_near(Backpatch *bp);         /* patch E9/cond_near forward jump */
 void cg_jmp_back(uint16_t target);         /* auto short/near backward unconditional */
-void cg_cond_back(int opcode, uint16_t target); /* short backward conditional (ASSERT range) */
+void cg_cond_back(int opcode, uint16_t target); /* backward conditional: short if fits, else Jcc_inv+3/JMP NEAR */
 
 /* load/store */
 void cg_load_bp(int32_t offset);
@@ -279,6 +279,7 @@ void cg_pop_cxbx(void);   /* POP  BX; POP  CX  (load rhs before runtime call) */
    In memory: {offset:word, segment:word} (little-endian, offset first). */
 void cg_les_bx_bp(int32_t offset);       /* LES BX, [BP+offset]  */
 void cg_les_bx_mem(uint16_t data_ofs);   /* LES BX, [data_ofs]+RELOC */
+uint16_t cg_import_var_slot(int rdoff_id); /* alloc data slot for imported VAR far address */
 void cg_dxax_to_esbx(void);          /* MOV BX,AX ; MOV ES,DX  (far ptr DX:AX → ES:BX) */
 void cg_deref_far(void);             /* MOV AX, ES:[BX]  */
 void cg_deref_far_byte(void);        /* MOV AL, ES:[BX]; zero-extend (for CHAR/BYTE) */

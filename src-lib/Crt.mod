@@ -98,10 +98,8 @@ BEGIN
 END ReadKey;
 
 PROCEDURE TextMode*(Mode: BYTE);
-VAR r : SYSTEM.Registers;
 BEGIN
-    r.AX := SYSTEM.AND(Mode, 0FFH);
-    SYSTEM.Intr(10H, r);
+    SYSTEM.VIDEOMODE(Mode)
 END TextMode;
 
 PROCEDURE GotoXY*(X, Y: INTEGER);
@@ -116,30 +114,24 @@ END GotoXY;
 
 PROCEDURE ClrScr*;
 BEGIN
-    Out.Char(CHR(27));
-    Out.String("[2J");
-    Out.Char(CHR(27));
-    Out.String("[1;1H");
+    Out.String(1BX + "[2J" + 1BX + "[1;1H");
 END ClrScr;
 
 PROCEDURE ClrEol*;
 BEGIN
-    Out.Char(CHR(27));
-    Out.String("[K");
+    Out.String(1BX + "[K");
 END ClrEol;
 
 PROCEDURE TextColor*(fg : INTEGER);
 BEGIN
-    Out.Char(CHR(27));
-    Out.String("[3");
+    Out.String(1BX + "[3");
     Out.Char(CHR(30H + (fg MOD 8)));
     Out.Char('m');
 END TextColor;
 
 PROCEDURE TextBackground*(bg : INTEGER);
 BEGIN
-    Out.Char(CHR(27));
-    Out.String("[4");
+    Out.String(1BX + "[4");
     Out.Char(CHR(30H + (bg MOD 8)));
     Out.Char('m');
 END TextBackground;

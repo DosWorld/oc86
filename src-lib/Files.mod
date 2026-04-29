@@ -16,76 +16,28 @@ TYPE
   END;
 
 PROCEDURE DOSSeek(handle: INTEGER; pos: LONGINT);
-  VAR r: SYSTEM.Registers;
 BEGIN
-  r.AX := 4200H;
-  r.BX := handle;
-  r.CX := INTEGER(SYSTEM.LSR(pos, 16));
-  r.DX := INTEGER(SYSTEM.AND(pos, 0FFFFH));
-  r.Flags := 0;
-  SYSTEM.Intr(21H, r)
+  SYSTEM.FSEEK(handle, pos);
 END DOSSeek;
 
 PROCEDURE DOSRead(handle: INTEGER; VAR buf; len: INTEGER): INTEGER;
-  VAR r: SYSTEM.Registers; p: POINTER TO CHAR;
 BEGIN
-  p := buf;
-  r.AX := 3F00H;
-  r.BX := handle;
-  r.CX := len;
-  r.DS := SYSTEM.SEG(p^);
-  r.DX := SYSTEM.OFS(p^);
-  r.Flags := 0;
-  SYSTEM.Intr(21H, r);
-  IF SYSTEM.AND(r.Flags, SYSTEM.FCarry) = 0 THEN RETURN r.AX END;
-  RETURN 0
+  RETURN SYSTEM.BLOCKREAD(handle, buf, len);
 END DOSRead;
 
 PROCEDURE DOSWrite(handle: INTEGER; VAR buf; len: INTEGER): INTEGER;
-  VAR r: SYSTEM.Registers; p: POINTER TO CHAR;
 BEGIN
-  p := buf;
-  r.AX := 4000H;
-  r.BX := handle;
-  r.CX := len;
-  r.DS := SYSTEM.SEG(p^);
-  r.DX := SYSTEM.OFS(p^);
-  r.Flags := 0;
-  SYSTEM.Intr(21H, r);
-  IF SYSTEM.AND(r.Flags, SYSTEM.FCarry) = 0 THEN RETURN r.AX END;
-  RETURN 0
+  RETURN SYSTEM.BLOCKWRITE(handle, buf, len);
 END DOSWrite;
 
 PROCEDURE DOSClose(handle: INTEGER);
-  VAR r: SYSTEM.Registers;
 BEGIN
-  r.AX := 3E00H;
-  r.BX := handle;
-  SYSTEM.Intr(21H, r)
+  SYSTEM.FCLOSE(handle)
 END DOSClose;
 
 PROCEDURE DOSGetFileSize(handle: INTEGER): LONGINT;
-  VAR r: SYSTEM.Registers; cur, sz: LONGINT;
 BEGIN
-  r.AX := 4201H;
-  r.BX := handle;
-  r.CX := 0;
-  r.DX := 0;
-  r.Flags := 0;
-  SYSTEM.Intr(21H, r);
-  IF SYSTEM.AND(r.Flags, SYSTEM.FCarry) # 0 THEN RETURN -1 END;
-  cur := SYSTEM.AND(LONGINT(r.AX), LONGINT(0FFFFH));
-  cur := SYSTEM.IOR(cur, SYSTEM.LSL(LONGINT(r.DX), 16));
-  r.AX := 4202H;
-  r.BX := handle;
-  r.CX := 0;
-  r.DX := 0;
-  SYSTEM.Intr(21H, r);
-  IF SYSTEM.AND(r.Flags, SYSTEM.FCarry) # 0 THEN RETURN -1 END;
-  sz := SYSTEM.AND(LONGINT(r.AX), LONGINT(0FFFFH));
-  sz := SYSTEM.IOR(sz, SYSTEM.LSL(LONGINT(r.DX), 16));
-  DOSSeek(handle, cur);
-  RETURN sz
+  RETURN SYSTEM.FSIZE(handle)
 END DOSGetFileSize;
 
 PROCEDURE BufFlush(VAR F: File);
