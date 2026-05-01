@@ -51,7 +51,7 @@ Executable tests catch real runtime bugs, survive code-generator refactors witho
 |------|----------------|
 | `tests/test_scanner.c` | All 33 keywords, identifiers, integer/hex/char/string literals, all operators, nested comments, whitespace, line tracking |
 | `tests/test_symbols.c` | Predeclared universe (types/consts/sysprocs/SYSTEM), scope open/close/shadow, AllocLocal BP offsets, CalcArgSize Pascal order, RECORD fields and extension chain, IsExtension |
-| `tests/test_codegen.c` | Exact byte sequences: prologue/epilogue (NEAR and FAR), load_imm/bp/mem, **byte load/store (CHAR/BYTE) for locals and globals** (MOV AL/[addr] + XOR AH,AH), far-ptr helpers (LES/ES:/DX:AX), arithmetic, inc/dec/cmp, setcc, 8086-safe jumps (cond_near, jmp_back, cond_back), NEAR and FAR calls with RELOC, invert_jcc |
+| `tests/test_codegen.c` | Exact byte sequences: prologue/epilogue (NEAR and FAR), load_imm/bp/mem, **byte load/store (CHAR/BYTE) for locals and globals** (MOV AL/[addr] + XOR AH,AH), far-ptr helpers (LES/ES:/DX:AX), arithmetic, inc/dec/cmp, setcc, 8086-safe jumps (cond_near, jmp_back, **cond_back short and near**), NEAR and FAR calls with RELOC, invert_jcc |
 | `tests/test_rdoff.c` | RDOFF2 binary: signature, file size, header size, **IMPORT seg_id = 2 bytes**, **GLOBAL seg_id = 1 byte**, RELOC/SEGRELOC layout, BSS record, code/data segment headers, EOF marker, record ordering |
 | `tests/test_tar.c` | ustar header: magic, typeflag, name, size field (octal), checksum, data placement, padding to 512-byte boundary, two-block EOF, two-file archive, system tar validation |
 | `tests/test_def.c` | def_write: CONST→TYPE→VAR→PROC order verified; root TYPE before extended TYPE (BASE before derived); RECORD with exported fields; RECORD extension with `BASE` line; `POINTER <name>` emits named base type; REAL/LONGREAL/SET field types; non-exported symbols excluded. def_read: full round-trip; deferred BASE resolution via linked list (`BasePatchNode`); FIELD parsing with multi-token types (`POINTER name`); REAL/LONGREAL resolve as primitive base types (no scope lookup); cross-module record extension; imported type as pointer base; FORWARD proc round-trip; PROC with REAL/LONGREAL params. |
@@ -165,6 +165,7 @@ All sections 17–36 are implemented in `test_src.sh` and passing.
 | 57d–g   | TestTypeTag.Mod      | RunAllTests  | 5000000    | stdout line `Failed: 0`      |
 | 58d–g   | TestForward.Mod      | RunAllTests  | 5000000    | stdout line `Failed: 0`      |
 | 59g–j   | TestBounds.Mod       | RunAllTests  | 5000000    | stdout line `Failed: 0`      |
+| 60c–f   | TestRepeat.Mod       | RunAllTests  | 5000000    | stdout line `Failed: 0`      |
 
 ### What each executable test covers
 
@@ -323,9 +324,75 @@ for all combinations tested by the byte-level section 37 tests.
 
 **TestForward.Mod** (section 58): FORWARD procedure declarations — mutual recursion via FORWARD (`Even`/`Odd` with small integer arguments); forward FAR procedure (`Compute`); forward non-exported procedure (`Helper`). 8 runtime checks. Compile-level checks (58a–58c): simple FORWARD compiles; mutual recursion compiles; unresolved FORWARD gives error.
 
+**TestRepeat.Mod** (section 60): `REPEAT...UNTIL` with a large loop body (> 127 bytes of
+generated x86 code). Verifies that `cg_cond_back` correctly emits the 5-byte
+`Jcc_inv rel8=+3 / JMP NEAR target` form when the backward offset doesn't fit in an 8-bit
+signed value. Compile-level check (60a): compiles without error. Byte-level check (60g):
+`75 03 E9` pattern present in `.om`. Runtime checks (60c–60f): `LargeBody(1)=0`,
+`LargeBody(3)=3`, `LargeBody(10)=45` — verifies the loop terminates correctly and produces
+the right accumulated result.
+
 **TestBounds.Mod** (section 59): `$R` directive and array bounds checking. Uses `(*$R+*)`. In-bounds read/write on fixed-size local array; sum via open-array parameter; boundary element write/read; variable index at boundaries. 7 runtime checks. Compile-level checks (59a–59f): `$R-` (default) allows constant out-of-bounds; `$R+` gives compile error for constant ≥ len; `$R+` gives compile error for negative constant; in-bounds constants compile with `$R+`; `$R-` after `$R+` disables check; `$R+` emits `SYSTEM_ErrIndexOutOfBounds` RDOFF import (not `SYSTEM_Halt`). Runtime halt checks (59k–59l): negative variable index halts with non-zero exit under `$R+`; variable index ≥ len halts with non-zero exit under `$R+`.
 
 **TestConstExpr.Mod** (section 52): Constant expression evaluation — verifies that arithmetic in `CONST` declarations is folded at compile time. Covers: `+`, `-`, `*`, `DIV`, `MOD` on literal integers and named constants; parenthesised sub-expressions `(A+B)*2`; operator precedence `A+B*2`; Oberon-07 floor-division semantics (`(-7) DIV 2 = -4`); unary-minus precedence (`-7 DIV 2 = -(7 DIV 2) = -3`); LONGINT promotion when result exceeds 16-bit (`1000*200 = 200000`). 15 checks. Compile-level checks (section 52a–52f): `+`/`-`/`*`/`DIV`/`MOD`, parentheses, negative operands, large products, chained constants, computed constant as array dimension. 6 checks. Imported constants (qualified as `Alias.Const`) are accepted in constant folding and are usable in array dimension declarations and CASE labels; tests added: `tests/ImportConstA.Mod` and `tests/ImportConstB.Mod`.
+
+---
+
+## Self-hosted compiler module compilation tests
+
+The Oberon self-hosted compiler lives in `src-ob/oc/`. Its modules are compiled with the
+C89 bootstrap compiler (`src/oc`). This is not automated in `make test` — run manually
+from `src-ob/oc/` when working on self-hosting:
+
+```bash
+cd src-ob/oc
+OC=../../src/oc
+LIB=../../lib
+
+# Compile in dependency order:
+OBERON_LIB=$LIB $OC OcScan.Mod
+OBERON_LIB=$LIB $OC OcSyms.Mod
+OBERON_LIB=$LIB $OC OcRdoff.Mod
+OBERON_LIB=$LIB:. $OC OcCgen.Mod
+OBERON_LIB=$LIB:. $OC OcTar.Mod
+OBERON_LIB=$LIB:. $OC OcDef.Mod
+OBERON_LIB=$LIB:. $OC OcImport.Mod
+OBERON_LIB=$LIB:. $OC OcPExpr.Mod
+OBERON_LIB=$LIB:. $OC OcPStmt.Mod
+OBERON_LIB=$LIB:. $OC OcParser.Mod
+OBERON_LIB=$LIB:. $OC OcMain.Mod
+```
+
+**Pass criterion:** each invocation prints `wrote <Module>.om` with no error lines.
+`cg_load_item: bad mode 5` warnings are harmless — they appear for imported procedure
+references and do not affect the compiled output.
+
+**Module map:**
+
+| Module file      | Mirrors C89      | Status  |
+|------------------|------------------|---------|
+| `OcScan.Mod`     | scanner.c        | ✓ Done  |
+| `OcSyms.Mod`     | symbols.c        | ✓ Done  |
+| `OcRdoff.Mod`    | rdoff.c          | ✓ Done  |
+| `OcCgen.Mod`     | codegen.c        | ✓ Done  |
+| `OcTar.Mod`      | tar.c            | ✓ Done  |
+| `OcDef.Mod`      | def.c            | ✓ Done  |
+| `OcImport.Mod`   | import.c         | ✓ Done  |
+| `OcPExpr.Mod`    | pexpr.c          | ✓ Done  |
+| `OcPStmt.Mod`    | parser.c (stmts) | ✓ Done  |
+| `OcParser.Mod`   | parser.c (decls) | ✓ Done  |
+| `OcMain.Mod`     | main.c           | ✓ Done  |
+
+All modules compile cleanly as of Stage 2 completion (2026-04-29).
+
+**Known idiom restrictions** (enforced by the bootstrap compiler dialect):
+- No `LOOP`/`EXIT` — use `WHILE done := FALSE; WHILE ~done DO ... END`
+- No `SHORT()` — use direct assignment for LONGREAL→REAL coercion
+- No `SYSTEM.VAL/GET/PUT` — use `POINTER TO T` and `p^` dereference
+- `SYSTEM.AND(x, LONGINT(0FFFFH))` instead of `INTEGER MOD 65536`
+- All `SYSTEM.*` intrinsics require the `SYSTEM.` qualified prefix
+- `REPEAT...UNTIL` with any body size: `CgCondBack` now emits a 5-byte `Jcc_inv +3 / JMP NEAR`
+  when the backward offset exceeds 8 bits — no conversion to `WHILE` needed
 
 ---
 
@@ -342,6 +409,7 @@ xt int                                        # list supported DOS interrupts
 **`xt run` options:**
 - `--max=N` — stop after N instructions (ALWAYS use to prevent infinite loops)
 - `-c dir` — host directory used as the C: drive root (default: cwd)
+- `--env=KEY=VALUE` - allow pass environment variables
 - Output is DOS CRLF (`\r\n`); always strip CR: `| tr -d '\r'`
 - Exit code 255 = emulator error; otherwise = program exit code
 
@@ -352,6 +420,7 @@ xt int                                        # list supported DOS interrupts
   Supported regs: `AX BX CX DX SI DI BP SP DS ES SS FLAGS.CARRY FLAGS.ZERO FLAGS.OVERFLOW`
 - `--wp=SEG:OFS:r|w|a` — watchpoint (read/write/access)
 - `--dump=SEG:OFS:LEN` — hex dump of memory region at stop
+- `--env=KEY=VALUE` - allow pass environment variables
 - Does NOT support `-c`; run from the directory containing the `.EXE`
 - Trace format per instruction: `CS:IP | bytes | disasm | registers | SS:SP | FLAGS`
 - After stop: full register dump + 32-word stack dump

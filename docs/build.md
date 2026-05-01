@@ -150,6 +150,38 @@ CALL FAR SYSTEM_DONE        ; DOS exit       (import seg 4)
 
 ---
 
+## Building the self-hosted Oberon compiler (Stage 2)
+
+The Oberon self-hosted compiler sources live in `src-ob/oc/`. They are compiled with the
+C89 bootstrap compiler (`src/oc`). All `.om` outputs go into `src-ob/oc/` alongside the sources.
+
+```bash
+cd src-ob/oc
+OC=../../src/oc
+LIB=../../lib
+
+# Compile in dependency order (each step requires the previous .om to be present):
+OBERON_LIB=$LIB       $OC OcScan.Mod    # no oc deps
+OBERON_LIB=$LIB       $OC OcSyms.Mod    # no oc deps
+OBERON_LIB=$LIB       $OC OcRdoff.Mod   # no oc deps
+OBERON_LIB=$LIB:.     $OC OcCgen.Mod    # needs OcRdoff.om, OcSyms.om
+OBERON_LIB=$LIB:.     $OC OcTar.Mod     # needs Files
+OBERON_LIB=$LIB:.     $OC OcDef.Mod     # needs OcSyms.om
+OBERON_LIB=$LIB:.     $OC OcImport.Mod  # needs OcDef.om, OcTar.om
+OBERON_LIB=$LIB:.     $OC OcPExpr.Mod   # needs OcScan.om, OcSyms.om, OcCgen.om
+OBERON_LIB=$LIB:.     $OC OcPStmt.Mod   # needs OcPExpr.om
+OBERON_LIB=$LIB:.     $OC OcParser.Mod  # needs OcPStmt.om, OcPExpr.om, OcImport.om
+OBERON_LIB=$LIB:.     $OC OcMain.Mod    # needs OcParser.om, all others
+```
+
+Each step should print `wrote <Module>.om` with no error lines.
+`cg_load_item: bad mode 5` warnings from imported-procedure references are harmless.
+
+The resulting `.om` files are the Oberon compiler modules. They are not yet wired
+into a DOS executable — that requires Stage 3 (Oberon linker) to be complete.
+
+---
+
 ## Environment variable
 
 ```bash

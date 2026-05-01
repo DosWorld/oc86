@@ -32,7 +32,10 @@ static void write_type(FILE *f, TypeDesc *t) {
     case TF_LONGREAL: fprintf(f, "LONGREAL"); return;
     case TF_SET:      fprintf(f, "SET");      return;
     case TF_ADDRESS:  fprintf(f, "ADDRESS");  return;
-    case TF_ARRAY:    fprintf(f, "ARRAY");    return;
+    case TF_ARRAY:
+        if (t->len >= 0) { fprintf(f, "ARRAY %d", t->len); }
+        else              { fprintf(f, "ARRAY"); }
+        return;
     case TF_NOTYPE:   fprintf(f, "VOID");     return;
     case TF_POINTER:
         fprintf(f, "POINTER ");
@@ -289,9 +292,20 @@ static TypeDesc *parse_def_type(char **pp) {
     *pp = p;
 
     if (strcmp(token, "POINTER") == 0) {
-        /* consume base type (may be VOID or a name) */
         TypeDesc *base = parse_def_type(pp);
         return type_new_pointer(base);
+    }
+    if (strcmp(token, "ARRAY") == 0) {
+        /* optional fixed length: "ARRAY N" means fixed-size array of N chars */
+        const char *q = *pp;
+        while (*q == ' ' || *q == '\t') q++;
+        if (*q >= '0' && *q <= '9') {
+            int alen = 0;
+            while (*q >= '0' && *q <= '9') alen = alen * 10 + (*q++ - '0');
+            *pp = q;
+            return type_new_array(type_char, alen);
+        }
+        return type_new_array(type_char, -1); /* open array */
     }
     return resolve_type_name(token);
 }

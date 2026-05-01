@@ -1019,7 +1019,7 @@ void olink_perform_linking(LinkerState *ls)
                               (uint16_t)(m->final_code_ofs - ((uint32_t)m->group_code_para << 4) + rofs));
                 } else
                     add_reloc(ls, (uint16_t)(ls->total_code_len >> 4),
-                              (uint16_t)rofs);
+                              (uint16_t)(m->final_data_ofs + rofs));
                 break;
 
             } /* switch */

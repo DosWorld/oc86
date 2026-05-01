@@ -914,6 +914,35 @@ void parse_statement(TypeDesc *ret_type) {
                 cg_emit2(0xF3, 0xA4);  /* REP MOVSB */
                 goto assign_done;
             }
+            /* Record-through-far-pointer assignment: emit REP MOVSB.
+               Both sides must be RECORD with is_ref (far pointer access).
+               Covers M_LOCAL/is_ref (VAR param or ^ deref) and M_GLOBAL/is_ref
+               (imported VAR).  Uses DS-swap trick: PUSH DS / set DS=src seg /
+               copy / POP DS. */
+            if (item.type && item.type->form == TF_RECORD &&
+                rhs.type  && rhs.type->form  == TF_RECORD &&
+                item.is_ref && rhs.is_ref) {
+                int32_t count = item.type->size;
+                cg_emit1(0x1E);            /* PUSH DS  (save data segment) */
+                /* Load src far addr into ES:BX; SI = src offset */
+                if (rhs.mode == M_LOCAL)   cg_les_bx_bp(rhs.adr);
+                else                       cg_les_bx_mem(rhs.adr);
+                cg_emit2(0x8B, 0xF3);      /* MOV SI, BX */
+                /* DS = src segment */
+                cg_emit1(0x06);            /* PUSH ES */
+                cg_emit1(0x1F);            /* POP DS */
+                /* Load dst far addr into ES:BX; DI = dst offset */
+                if (item.mode == M_GLOBAL) cg_les_bx_mem(item.adr);
+                else                       cg_les_bx_bp(item.adr);
+                cg_emit2(0x8B, 0xFB);      /* MOV DI, BX */
+                /* Copy CX bytes: DS:SI → ES:DI */
+                cg_load_imm((int16_t)count);
+                cg_emit2(0x8B, 0xC8);      /* MOV CX, AX */
+                cg_emit1(OP_CLD);          /* CLD */
+                cg_emit2(0xF3, 0xA4);      /* REP MOVSB */
+                cg_emit1(0x1F);            /* POP DS  (restore data segment) */
+                goto assign_done;
+            }
             /* Implicit INTEGER -> LONGINT coercion at assignment boundary. */
             if (item.type && item.type->form == TF_LONGINT &&
                 rhs.type  && rhs.type->form  != TF_LONGINT &&
